@@ -255,6 +255,94 @@ This would happen when the device has not been able to completely transfer a seg
 
 The contents of this register are reset to 0 when read by the driver.
 
+\subsection{Suggested hardware operation}
+
+\subsubsection{Interrupt generation}
+
+It is not mentioned explicitly below, but no interrupts shall ever be raised unless \texttt{HW\_CTRL:INT\_CTRL} is set. This applies to all events that generate interrupts.
+
+Generally, an interrupt is raised for readiness of a frame to be copied into system memory, and another interrupt is raised to mark a DMA completion. There are cases described when both of these may happen simultaneously. It is legal for the device to generate a single interrupt in this case.
+
+\subsubsection{Register accesses}
+
+Whenever read by the system, \texttt{DMA\_STS} and \texttt{SEG\_DROPPED} must be reset to 0 after the current value has been supplied.
+
+\subsubsection{Starting image capture}
+
+Image acquisition shall be started when \texttt{HW\_CTRL:TRM\_CTRL} is set, and shall stop when this bit is unset.
+
+\subsubsection{Image capture}
+
+The FG shall start acquiring images when \texttt{HW\_CTRL:TRM\_CTRL} is set, and shall stop acquiring images when this bit is unset.
+
+The FG shall capture 3 images simultaneously (one from each camera) but these frames are presented to the system individually.
+
+The FG shall proceed to capture a triplet into local buffers. When complete, the FG can start transferring these into memory. It shall first inform the system of the availability of a frame from camera 1, by setting \texttt{DMA\_STS:NEXT\_TRF} to 1 and raising an interrupt.
+
+Immediately after, it is expected that the driver will negociate the DMA transfer and write the appropriate values into the EC220 DMA registers. When the start bit is raised, the FG shall start the data transfer.
+
+When the DMA transfer is complete, the FG shall set \texttt{DMA\_STS:DMA\_COMP}. The frame from camera 2 can now be transferred, so the FG shall set \texttt{DMA\_STS:NEXT\_TRF} to 2. At this point an interrupt shall be raised.
+%FIXME ok to raise 2 above
+
+Identically to frame 1, the driver will start the DMA transfer, the FG shall set \texttt{DMA\_STS:DMA\_COMP} when completed and raise another interrupt.
+
+The process shall then repeat for frame 3, except \texttt{DMA\_STS:NEXT\_TRF} shall be set to 3 at the appropriate time. After the transfer of the 3rd frame has completed, the frame triplet has been completed successfully, and it is assumed that the next triplet is not yet ready to be transferred. At the completion of the 3rd frame copy into system RAM, \texttt{DMA\_STS:DMA\_COMP} shall be set, but \texttt{DMA\_STS:NEXT\_TRF} shall be left as 0. On the other hand, if the next triplet is ready to be transferred, \texttt{DMA\_STS:NEXT\_TRF} can be set appropriately and a single interrupt can be used to signify both that frame 3 of the previous triplet completed and that frame 1 of the next triplet is ready to be transferred.
+
+The process repeats until frame transmission is disabled.
+
+\subsubsection{Notes on concurrency}
+
+The FG shall have two internal triplet buffers. The reasoning here is that we anticipate the DMA transfer will not be able to complete in the short amount of time we have after one capture cycle completes before the next one begins. Additionally, erroneous circumstances may occur where the driver is not able to program the DMA transfers quick enough, or it cannot reserve any more memory for DMA transfers, so we need a buffering system regardless.
+
+Logically, the FG shall lock a triplet buffer as soon as it offers the first frame to the driver (by signalling an interrupt after setting \texttt{DMA\_STS:NEXT\_TRF}). It shall unlock the triplet after completion of transfer of the 3rd frame into system RAM (at which time it will set \texttt{DMA\_STS:DMA\_COMP} and raise an interrupt).
+
+When a triplet buffer is locked, the FG shall not capture any images into it. The data there is locked into place until it is unlocked later.
+
+As the FG will always transfer images sequentially, it is not possible under the design of this system for more than one triplet buffer to be locked at any one time. In other words, there will always be at least one triplet buffer unlocked, where data can be captured.
+
+This may lead to the scenario where the contents of an unlocked frame triplet buffer need to be discarded because a new image is ready to be captured. This is by design, but will only happen under erroneous circumstances where the driver/OS is not able to keep up. The driver/OS will lose a number of triplets but it will be able to resume OK. See the scenarios below for further illustrations of this.
+
+\paragraph{Scenario 1: DMA falls behind by 1 frame}
+Something like the below is anticipated to happen all of the time. The system copes without dropping any frames.
+
+\begin{enumerate}
+\item Both B1 and B2 are unlocked and empty.
+\item Image capture of T1 begins into B1.
+\item Image capture of T1 completes.
+\item B1 is locked. NEXT\_TRF is set to 1, interrupt raised.
+\item Driver responds soon after, starts DMA transfer of T1F1.
+\item Image capture of T2 begins. As B1 is locked, capture begins into B2.
+\item DMA transfer of frame T1F1 completes. NEXT\_TRF is set to 2, DMA\_COMP is set, interrupt raised.
+\item Driver responds soon after, starts DMA transfer of T1F2.
+\item Image capture of T2 completes.
+\item DMA transfer of frame T1F2 completes. NEXT\_TRF is set to 3, DMA\_COMP is set, interrupt raised.
+\item Driver responds soon after, starts DMA transfer of T1F3.
+\item DMA transfer of frame T1F3 completes. B1 (which held T1) is unlocked. B2 is locked. NEXT\_TRF is set to 1, DMA\_COMP is set, interrupt raised.
+\item Driver responds soon after, starts DMA transfer of T2F1.
+\item Image capture of T3 begins. As B2 is locked, capture begins into B1.
+\item DMA transfer of frame T1F1 completes. NEXT\_TRF is set to 2, DMA\_COMP is set, interrupt raised.
+\item Driver responds soon after, starts DMA transfer of T2F2.
+\item ...
+\end{enumerate}
+
+The important points to note from the above is that image capture of T2 began before T1 had been completely copied into system RAM, but this did not hinder anything. When capture of T3 started, T1 had been completely copied but T2 had not been completely copied into system RAM.
+
+\paragraph{Scenario 2: Unresponsive driver}
+
+\begin{enumerate}
+\item Both B1 (triplet buffer 1) and B2 (triplet buffer 2) are unlocked and empty.
+\item Image capture begins into B1.
+\item Image capture ends.
+\item B1 is locked. NEXT\_TRF is set to 1, interrupt raised.
+\item Time passes. Driver doesn't respond in any way.
+\item Image capture of the next triplet begins. As B1 is locked, capture begins into B2.
+\item Image capture into B2 completes. As the transfer from B1 is still ongoing (actually, it hasn't even started), no interrupt is raised.
+\item Time passes. Driver still hasn't responded.
+\item Image capture of the next triplet begins. As B1 is locked, capture begins into B2. As B2 already contained a triplet, this triplet is discarded and SEG\_DROPPED is incremented.
+\item Image capture into B2 completes. As the transfer from B1 is still ongoing (actually, it hasn't even started), no interrupt is raised.
+\item ...
+\end{enumerate}
+
 \subsection{Suggested driver operation}
 
 \subsubsection{Initialization}
