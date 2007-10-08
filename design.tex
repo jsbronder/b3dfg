@@ -105,19 +105,19 @@ Please ensure these guidelines are followed, as not doing so can cause some driv
 
 \section{Frame transfer}
 
-\subsection{Payloads and segments}
+\subsection{Triplets and frames}
 
-I will use the term \textbf{payload} to indicate a set of 3 memory regions which form a frame triplet.
+I will use the term \textbf{triplet} to indicate a set of 3 memory regions which form a group of 3 images captured at one point in time.
 
-I will use the term \textbf{segment} to refer to an indiviual frame, a single memory region.
+I will use the term \textbf{frame} to refer to an indiviual image, a single memory region.
 
-A payload therefore consists of 3 segments, in the same way that a frame triplet consists of 3 frames.
+A triplet therefore consists of 3 frames.
 
 \subsection{Data transfer}
 
 As mentioned above, DMA data transfers will be controlled by the driver. The FG will provide direct access to the DMA control registers through a certain portion of the PCI address space.
 
-When the FG is ready to write a segment into system memory, the FG will set a bit in a status register and raise an interrupt. The driver will examine the status register, determine that a frame is ready to be copied into memory, and will proceed to program memory addresses and other details into the EC220 DMA control registers.
+When the FG is ready to write a frame into system memory, the FG will set a bit in a status register and raise an interrupt. The driver will examine the status register, determine that a frame is ready to be copied into memory, and will proceed to program memory addresses and other details into the EC220 DMA control registers.
 
 The FG logic will detect when the driver has enabled the start bit in the EC220 DMA status register, and will then start the transfer into RAM. When the transfer is complete, the FG will set a bit in a status register to indicate completion of the copy, and will then raise another interrupt.
 
@@ -172,14 +172,14 @@ BAR0 will contain the following registers:
 
 \begin{tabular}{|c|c|l|c|c|} \hline
 \textbf{Offset} & \textbf{Mnemonic} & \textbf{Name} & \textbf{Default} & \textbf{Driver access} \\ \hline
-0x0 & SEG\_SIZE & Segment size & 192 & RO \\ \hline
+0x0 & FRM\_SIZE & Segment size & 192 & RO \\ \hline
 0x1 & HW\_CTRL & Hardware control & 0 & R/W \\ \hline
 0x2 & \multicolumn{4}{|c|}{Reserved} \\ \hline
 0x40 & DMA\_STS & DMA status & 0 & RO \\ \hline
-0x41 & SEG\_DROPPED & Discarded segments & 0 & RO \\ \hline
+0x41 & TRP\_DROPPED & Discarded triplets & 0 & RO \\ \hline
 \end{tabular}
 
-\subsubsection{SEG\_SIZE}
+\subsubsection{FRM\_SIZE}
 
 \begin{description}
 \item[Address] BAR0 + 0x0
@@ -188,7 +188,7 @@ BAR0 will contain the following registers:
 \item[Size] 1 byte
 \end{description}
 
-This register contains the size of a segment, expressed in terms of 4kb pages. The value 192 should be hardwired here, 192*4096=1024*768=786432
+This register contains the size of a frame, expressed in terms of 4kb pages. The value 192 should be hardwired here, 192*4096=1024*768=786432
 
 \subsubsection{HW\_CTRL}
 
@@ -223,16 +223,16 @@ The contents of this register are reset to 0 when read by the driver.
 
 \begin{tabular}{|c|c|c|} \hline
 \textbf{Bit} & \textbf{Mnemonic} & \textbf{Description} \\ \hline
-0:1 & NEXT\_TRF & One-based ID of next segment to be transferred. 0 = no segment pending \\ \hline
+0:1 & NEXT\_TRF & One-based ID of next frame to be transferred. 0 = no frame pending \\ \hline
 2 & DMA\_COMP & Completion of DMA transfer. \\ \hline
 3:7 & \multicolumn{2}{|c|}{Reserved} \\ \hline
 \end{tabular}
 
 \paragraph{NEXT\_TRF}
 
-When nonzero, this field indicates that there is a segment ready to be transferred from the FG into system RAM. The value of the field indicates the one-based index into the payload of the segment in question (the driver can use this value to determine when one payload finishes and the next one starts, as well as keep track of dropped frames). The driver shall proceed to program the DMA register in order to start the transfer.
+When nonzero, this field indicates that there is a frame ready to be transferred from the FG into system RAM. The value of the field indicates the one-based index into the triplet of the frame in question (the driver can use this value to determine when one triplet finishes and the next one starts). The driver shall proceed to program the DMA register in order to start the transfer.
 
-When zero, this field indicates that there is currently no segment ready to be transferred into system RAM.
+When zero, this field indicates that there is currently no frame ready to be transferred into system RAM.
 
 \paragraph{DMA\_COMP}
 
@@ -240,7 +240,7 @@ When the FG has completed a DMA transfer, it shall set this bit and raise an int
 
 The driver shall not use this as an indication that the FG is ready to start the next DMA transfer. It only signifies completion of the previously programmed DMA operation.
 
-\subsubsection{SEG\_DROPPED}
+\subsubsection{TRP\_DROPPED}
 
 \begin{description}
 \item[Address] BAR0 + 0x41
@@ -249,9 +249,9 @@ The driver shall not use this as an indication that the FG is ready to start the
 \item[Size] 1 byte
 \end{description}
 
-If the FG has to discard a frame, it shall increment this counter by one.
+If the FG has to discard a triplet, it shall increment this counter by one.
 
-This would happen when the device has not been able to completely transfer a segment into system RAM before the next segment arrives.
+This would happen when the device has not been able to completely transfer a triplet into system RAM before the next triplet arrives.
 
 The contents of this register are reset to 0 when read by the driver.
 
@@ -265,7 +265,7 @@ Generally, an interrupt is raised for readiness of a frame to be copied into sys
 
 \subsubsection{Register accesses}
 
-Whenever read by the system, \texttt{DMA\_STS} and \texttt{SEG\_DROPPED} must be reset to 0 after the current value has been supplied.
+Whenever read by the system, \texttt{DMA\_STS} and \texttt{TRP\_DROPPED} must be reset to 0 after the current value has been supplied.
 
 \subsubsection{Starting image capture}
 
@@ -346,7 +346,7 @@ The important points to note from the above is that image capture of T2 began be
 \item Image capture of T2 begins. As B1 is locked, capture begins into B2.
 \item Image capture of T2 into B2 completes. As the transfer from B1 is still ongoing (actually, it hasn't even started), no interrupt is raised.
 \item Time passes. Driver still hasn't responded.
-\item Image capture of T3 begins. As B1 is locked, capture begins into B2. As B2 already contained a triplet, this triplet is discarded and SEG\_DROPPED is incremented.
+\item Image capture of T3 begins. As B1 is locked, capture begins into B2. As B2 already contained a triplet, this triplet is discarded and TRP\_DROPPED is incremented.
 \item Image capture into B2 completes. As the transfer from B1 is still ongoing (actually, it hasn't even started), no interrupt is raised.
 \item ...
 \end{enumerate}
@@ -359,10 +359,10 @@ The important points to note from the above is that image capture of T2 began be
 \item DMA transfer of T1F2 completes. NEXT\_TRF is set to 3, DMA\_COMP is set, interrupt raised.
 \item Driver does not respond for some reason.
 \item T2 capture (into B2) completes.
-\item T3 capture begins. B1 is still locked, so capture happens into B2. There was already a triplet in B2, so SEG\_DROPPED is incremented.
+\item T3 capture begins. B1 is still locked, so capture happens into B2. There was already a triplet in B2, so TRP\_DROPPED is incremented.
 \item Driver finally programs new DMA buffers. Transfer of T1F3 begins.
 \item Transfer of T1F3 completes. DMA\_COMP is set, interrupt raised. At this point, there is not currently any triplet ready to be transferred.
-\item Driver receives interrupt, reads registers and observes that SEG\_DROPPED is non-zero (i.e. a frame has been lost).
+\item Driver receives interrupt, reads registers and observes that TRP\_DROPPED is non-zero (i.e. a frame has been lost).
 \item Capture of T3 completes. NEXT\_TRF is set to 1, interrupt raised.
 \item Driver starts DMA transfer of T3F1.
 \item ...
@@ -374,7 +374,7 @@ Interesting points above: When the DMA transfer of T2 completed, the FG was not 
 
 \subsubsection{Initialization}
 
-The driver shall read the segment size from \texttt{SEG\_SIZE} and reserve a series of appropriately sized physically contiguous segments in memory.
+The driver shall read the frame size from \texttt{FRM\_SIZE} and reserve a series of appropriately sized physically contiguous segments in memory.
 
 \subsubsection{Enabling image transmission}
 
@@ -386,11 +386,11 @@ Upon reception of an interrupt, the driver shall read the value of \textbf{DMA\_
 
 Otherwise, the driver must handle the interrupt.
 
-If \textbf{DMA\_STS:NEXT\_TRF} is nonzero, the driver shall try it's best to program the DMA registers with the address of a free segment in system RAM and start the transfer. FIXME need to document this. The driver shall note the value of this field, as it is used to keep track of which parts of a payload have been transferred.
+If \textbf{DMA\_STS:NEXT\_TRF} is nonzero, the driver shall try it's best to program the DMA registers with the address of a free frame in system RAM and start the transfer. FIXME need to document this. The driver shall note the value of this field, as it is used to keep track of which parts of the current triplet have been transferred.
 
-It may be the case that the driver is not able to program further segment addresses into the device, because those memory regions are not available (e.g. userspace is still using them). In this case, the driver should not take any action on the hardware, but could possibly record a flag to be communicated to it's users later. The users can determine the number of discarded frames by reading \texttt{SEG\_DROPPED}.
+It may be the case that the driver is not able to program further frame addresses into the device, because those memory regions are not available (e.g. userspace is still using them). In this case, the driver should not take any action on the hardware, but could possibly record a flag to be communicated to it's users later. The users can determine the number of discarded frames by reading \texttt{TRP\_DROPPED}.
 
-If \textbf{DMA\_STS:DMA\_COMP} is nonzero, the driver shall observe that the previously-programmed DMA transfer was completed successfully. By tracking the value of \texttt{NEXT\_TRF} throughout, it shall realise that this particular completion may mark the completion of a payload, in which case it is able to hand off that data to userspace.
+If \textbf{DMA\_STS:DMA\_COMP} is nonzero, the driver shall observe that the previously-programmed DMA transfer was completed successfully. By tracking the value of \texttt{NEXT\_TRF} throughout, it shall realise that this particular completion may mark the completion of a triplet, in which case it is able to hand off that data to userspace.
 
 \subsubsection{Ending transmission}
 
@@ -403,16 +403,16 @@ The driver shall then read \texttt{PL\_DROPPED} in order to reset its value.
 The driver shall provide the following functionality to it's users:
 
 \begin{enumerate}
-\item A mechanism to address the memory segments programmed into the device.
-\item A mechanism to control which segments are programmed at any one time.
-\item A mechanism to read \texttt{SEG\_DROPPED}.
+\item A mechanism to address the memory frames programmed into the device.
+\item A mechanism to control which frames are programmed at any one time.
+\item A mechanism to read \texttt{TRP\_DROPPED}.
 \end{enumerate}
 
 \section{Driver specification}
 
 \subsection{Buffer theory}
 
-To remain somewhat analogous to the current IEEE1394-based software code, we will use the term \textit{buffer} to refer to a payload.
+To remain somewhat analogous to the current IEEE1394-based software code, we will use the term \textit{buffer} to refer to a triplet.
 
 During component initialization, the application will request a number of buffers from the driver. The driver will then attempt to reserve the appropriate amount of segments in physical memory.
 
@@ -426,7 +426,7 @@ Buffer 2 Segment 1 & Buffer 2 Segment 2 & Buffer 2 Segment 3 \\ \hline
 Buffer 3 Segment 1 & Buffer 3 Segment 2 & Buffer 3 Segment 3 \\ \hline
 \end{tabular}
 
-In the above table, each row is one buffer (i.e. one payload, an image triplet), and each cell is one segment (i.e. one image frame). Each cell is positioned in virtual memory immediately after the end of the previous one.
+In the above table, each row is one buffer (i.e. one triplet), and each cell is one segment (i.e. one image frame). Each cell is positioned in virtual memory immediately after the end of the previous one.
 
 Buffers have a notion of \textit{ownership} which may initially seem a little unintuitive.
 \begin{itemize}
