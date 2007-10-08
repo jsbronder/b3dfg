@@ -298,9 +298,17 @@ Logically, the FG shall lock a triplet buffer as soon as it offers the first fra
 
 When a triplet buffer is locked, the FG shall not capture any images into it. The data there is locked into place until it is unlocked later.
 
-As the FG will always transfer images sequentially, it is not possible under the design of this system for more than one triplet buffer to be locked at any one time. In other words, there will always be at least one triplet buffer unlocked, where data can be captured.
+As the FG will always transfer triplets sequentially, it is not possible under the design of this system for more than one triplet buffer to be locked at any one time. In other words, there will always be at least one triplet buffer unlocked, where new data can be captured.
 
-This may lead to the scenario where the contents of an unlocked frame triplet buffer need to be discarded because a new image is ready to be captured. This is by design, but will only happen under erroneous circumstances where the driver/OS is not able to keep up. The driver/OS will lose a number of triplets but it will be able to resume OK. See the scenarios below for further illustrations of this.
+This may lead to the scenario where the contents of an unlocked frame triplet buffer need to be discarded because a new image is ready to be captured. This is by design, but will only happen under erroneous circumstances where the driver/OS is not able to keep up. The driver/OS will lose a number of triplets but it will be able to detect this and resume OK. See the scenarios below for further illustrations of this.
+
+The following notation is used in the scenarios below:
+
+\begin{itemize}
+\item \textbf{B1} refers to internal buffer 1
+\item \textbf{T1} refers to triplet 1
+\item \textbf{T1F1} refers to triplet 1, frame 1
+\end{itemize}
 
 \paragraph{Scenario 1: DMA falls behind by 1 frame}
 Something like the below is anticipated to happen all of the time. The system copes without dropping any frames.
@@ -325,23 +333,42 @@ Something like the below is anticipated to happen all of the time. The system co
 \item ...
 \end{enumerate}
 
-The important points to note from the above is that image capture of T2 began before T1 had been completely copied into system RAM, but this did not hinder anything. When capture of T3 started, T1 had been completely copied but T2 had not been completely copied into system RAM.
+The important points to note from the above is that image capture of T2 began before T1 had been completely copied into system RAM, but this did not hinder anything. When capture of T3 started, T2 had not been completely copied into system RAM, but the prior completion of T1 meant that there is a buffer available for capture.
 
 \paragraph{Scenario 2: Unresponsive driver}
 
 \begin{enumerate}
 \item Both B1 (triplet buffer 1) and B2 (triplet buffer 2) are unlocked and empty.
-\item Image capture begins into B1.
-\item Image capture ends.
+\item Image capture of T1 begins into B1.
+\item T1 image capture ends.
 \item B1 is locked. NEXT\_TRF is set to 1, interrupt raised.
 \item Time passes. Driver doesn't respond in any way.
-\item Image capture of the next triplet begins. As B1 is locked, capture begins into B2.
-\item Image capture into B2 completes. As the transfer from B1 is still ongoing (actually, it hasn't even started), no interrupt is raised.
+\item Image capture of T2 begins. As B1 is locked, capture begins into B2.
+\item Image capture of T2 into B2 completes. As the transfer from B1 is still ongoing (actually, it hasn't even started), no interrupt is raised.
 \item Time passes. Driver still hasn't responded.
-\item Image capture of the next triplet begins. As B1 is locked, capture begins into B2. As B2 already contained a triplet, this triplet is discarded and SEG\_DROPPED is incremented.
+\item Image capture of T3 begins. As B1 is locked, capture begins into B2. As B2 already contained a triplet, this triplet is discarded and SEG\_DROPPED is incremented.
 \item Image capture into B2 completes. As the transfer from B1 is still ongoing (actually, it hasn't even started), no interrupt is raised.
 \item ...
 \end{enumerate}
+
+\paragraph{Scenario 3: Unresponsive driver recovery}
+
+\begin{enumerate}
+\item T1 is captured into B1. B1 is locked. Driver starts DMA transfers, the copy of the first frame has completed and the 2nd (T1F2) is in progress.
+\item T2 capture begins into B2.
+\item DMA transfer of T1F2 completes. NEXT\_TRF is set to 3, DMA\_COMP is set, interrupt raised.
+\item Driver does not respond for some reason.
+\item T2 capture (into B2) completes.
+\item T3 capture begins. B1 is still locked, so capture happens into B2. There was already a triplet in B2, so SEG\_DROPPED is incremented.
+\item Driver finally programs new DMA buffers. Transfer of T1F3 begins.
+\item Transfer of T1F3 completes. DMA\_COMP is set, interrupt raised. At this point, there is not currently any triplet ready to be transferred.
+\item Driver receives interrupt, reads registers and observes that SEG\_DROPPED is non-zero (i.e. a frame has been lost).
+\item Capture of T3 completes. NEXT\_TRF is set to 1, interrupt raised.
+\item Driver starts DMA transfer of T3F1.
+\item ...
+\end{enumerate}
+
+Interesting points above: When the DMA transfer of T2 completed, the FG was not ready to transfer the next triplet as the capture had not completed. Two interrupts were required where under other circumstances one might have done -- the first to indicate copy completion of T2F3, and the 2nd a little while later to indicate the availability of T3F1.
 
 \subsection{Suggested driver operation}
 
