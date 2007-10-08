@@ -440,12 +440,12 @@ When referenced in other interfaces, buffers will be referenced by index, starti
 The driver will provide \texttt{mmap} functionality to modify the application processes \textit{virtual address space}. It will provide a region, contiguous in virtual memory, which will contiguously address the buffers in numerical order (and contiguously address their segments within). In other words, it will allow the application to obtain a memory map in it's virtual address space which looks as follows:
 
 \begin{tabular}{|c|c|c|}\hline
-Buffer 1 Segment 1 & Buffer 1 Segment 2 & Buffer 1 Segment 3 \\ \hline
-Buffer 2 Segment 1 & Buffer 2 Segment 2 & Buffer 2 Segment 3 \\ \hline
-Buffer 3 Segment 1 & Buffer 3 Segment 2 & Buffer 3 Segment 3 \\ \hline
+Buffer 1 Frame 1 & Buffer 1 Frame 2 & Buffer 1 Frame 3 \\ \hline
+Buffer 2 Frame 1 & Buffer 2 Frame 2 & Buffer 2 Frame 3 \\ \hline
+Buffer 3 Frame 1 & Buffer 3 Frame 2 & Buffer 3 Frame 3 \\ \hline
 \end{tabular}
 
-In the above table, each row is one buffer (i.e. one triplet), and each cell is one segment (i.e. one image frame). Each cell is positioned in virtual memory immediately after the end of the previous one.
+In the above table, each row is one buffer (i.e. one triplet), and each cell is one image frame. Each cell is positioned in virtual memory immediately after the end of the previous one.
 
 Buffers have a notion of \textit{ownership} which may initially seem a little unintuitive.
 \begin{itemize}
@@ -482,31 +482,44 @@ Other than storing a reference to the b3dfg\_dev structure in the file pointer, 
 
 \paragraph{GET\_BUFFER\_SIZE}
 
+This ioctl shall return the size of a single buffer.
+
 \paragraph{SET\_BUFFERS}
+
+This ioctl shall be used to allocate a number of buffers in memory. Further invokations shall change the number of allocated buffers (by allocating more or freeing existing ones). This can only be called when transmission is disabled and will dequeue any buffers that have been queued.
 
 \paragraph{QUEUE\_BUFFER}
 
+This ioctl shall transfer control of a buffer from the application to the FG. Some time later, during image transmission, this buffer shall fill up with a frame triplet.
+
 \paragraph{POLL\_BUFFER}
+
+This non-blocking ioctl shall examine the status of a queued buffer and indicate whether image data has arrived or not.
 
 \paragraph{WAIT\_BUFFER}
 
+This blocking ioctl shall examine the status of a queued buffer. If it has been filled with image data, it shall return immediately indicating this. Otherwise, it shall wait until image data arrives and then return.
+
 \paragraph{SET\_TRANSMISSION}
+
+This ioctl shall enable or disable image transmission.
 
 \paragraph{GET\_DROPPED}
 
+This ioctl shall be used to query the number of buffers dropped by the hardware.
+
 \subsubsection{mmap}
+
+% FIXME: mmap and SET_BUFFERS incompatibilities?
+mmap shall provide a nopage function which will provide a memory region in the processes virtual address space which corresponds to the allocated buffers represented contiguously.
 
 \subsubsection{poll}
 
+poll shall add a waitqueue entry which triggers as soon as an image is transferred into any buffer.
+
 \subsubsection{close}
 
-% DMA
-% Config space
-% Buffer
-% interrupt on triplet
-% enable/disable interrupts
-% frame drop counter
+This is almost a no-op apart from cleaning up.
 
 \end{document}
-
 
