@@ -174,9 +174,28 @@ BAR0 will contain the following registers:
 \textbf{Offset} & \textbf{Mnemonic} & \textbf{Name} & \textbf{Default} & \textbf{Driver access} \\ \hline
 0x0 & FRM\_SIZE & Segment size & 192 & RO \\ \hline
 0x1 & HW\_CTRL & Hardware control & 0 & R/W \\ \hline
-0x2 & \multicolumn{4}{|c|}{Reserved} \\ \hline
+0x2.. & \multicolumn{4}{|c|}{Reserved} \\ \hline
 0x40 & DMA\_STS & DMA status & 0 & RO \\ \hline
 0x41 & TRP\_DROPPED & Discarded triplets & 0 & RO \\ \hline
+\end{tabular}
+
+The registers at address 0x80 upwards map to the EC220 DMA control registers
+as follows:
+
+\begin{tabular}{|c|c|} \hline
+\textbf{BAR0 offset} & \textbf{EC220 register} \\ \hline
+0x80 & \multirow{4}{*}{DMA Address Register} \\
+0x81 & \\
+0x82 & \\
+0x83 & \\ \hline
+0x84 & \multirow{4}{*}{Transfer Size Register} \\
+0x85 & \\
+0x86 & \\
+0x87 & \\ \hline
+0x88 & \multirow{4}{*}{DMA Status Register} \\
+0x89 & \\
+0x8a & \\
+0x8b & \\ \hline
 \end{tabular}
 
 \subsubsection{FRM\_SIZE}
@@ -386,7 +405,7 @@ Upon reception of an interrupt, the driver shall read the value of \textbf{DMA\_
 
 Otherwise, the driver must handle the interrupt.
 
-If \textbf{DMA\_STS:NEXT\_TRF} is nonzero, the driver shall try it's best to program the DMA registers with the address of a free frame in system RAM and start the transfer. FIXME need to document this. The driver shall note the value of this field, as it is used to keep track of which parts of the current triplet have been transferred.
+If \textbf{DMA\_STS:NEXT\_TRF} is nonzero, the driver shall try it's best to program the DMA registers with the address of a free frame in system RAM and start the transfer. The driver shall note the value of this field, as it is used to keep track of which parts of the current triplet have been transferred.
 
 It may be the case that the driver is not able to program further frame addresses into the device, because those memory regions are not available (e.g. userspace is still using them). In this case, the driver should not take any action on the hardware, but could possibly record a flag to be communicated to it's users later. The users can determine the number of discarded frames by reading \texttt{TRP\_DROPPED}.
 
