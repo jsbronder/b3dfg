@@ -168,15 +168,13 @@ During development, set to 0x1901 (Eureka). Before production, we will purchase 
 
 \subsection{Registers}
 
-BAR0 will contain the following registers:
+BAR0 will contain the following 32-bit registers:
 
 \begin{tabular}{|c|c|l|c|c|} \hline
 \textbf{Offset} & \textbf{Mnemonic} & \textbf{Name} & \textbf{Default} & \textbf{Driver access} \\ \hline
-0x0 & FRM\_SIZE & Segment size & 192 & RO \\ \hline
-0x1 & HW\_CTRL & Hardware control & 0 & R/W \\ \hline
-0x2.. & \multicolumn{4}{|c|}{Reserved} \\ \hline
-0x40 & DMA\_STS & DMA status & 0 & RO \\ \hline
-0x41 & TRP\_DROPPED & Discarded triplets & 0 & RO \\ \hline
+0x00 & FRM\_SIZE & Frame size & 192 & RO \\ \hline
+0x04 & HW\_CTRL & Hardware control & 0 & R/W \\ \hline
+0x08 & DMA\_STS & DMA status & 0 & RO \\ \hline
 \end{tabular}
 
 The registers at address 0x80 upwards map to the EC220 DMA control registers
@@ -184,18 +182,9 @@ as follows:
 
 \begin{tabular}{|c|c|} \hline
 \textbf{BAR0 offset} & \textbf{EC220 register} \\ \hline
-0x80 & \multirow{4}{*}{DMA Address Register} \\
-0x81 & \\
-0x82 & \\
-0x83 & \\ \hline
-0x84 & \multirow{4}{*}{Transfer Size Register} \\
-0x85 & \\
-0x86 & \\
-0x87 & \\ \hline
-0x88 & \multirow{4}{*}{DMA Status Register} \\
-0x89 & \\
-0x8a & \\
-0x8b & \\ \hline
+0x80 & DMA Address Register \\ \hline
+0x84 & Transfer Size Register \\ \hline
+0x88 & DMA Status Register \\ \hline
 \end{tabular}
 
 \subsubsection{FRM\_SIZE}
@@ -204,7 +193,7 @@ as follows:
 \item[Address] BAR0 + 0x0
 \item[Driver access] RO
 \item[Default value] 192
-\item[Size] 1 byte
+\item[Size] 32 bits
 \end{description}
 
 This register contains the size of a frame, expressed in terms of 4kb pages. The value 192 should be hardwired here, 192*4096=1024*768=786432
@@ -212,10 +201,10 @@ This register contains the size of a frame, expressed in terms of 4kb pages. The
 \subsubsection{HW\_CTRL}
 
 \begin{description}
-\item[Address] BAR0 + 0x1
+\item[Address] BAR0 + 0x4
 \item[Driver access] R/W
 \item[Default value] 0
-\item[Size] 1 byte
+\item[Size] 32 bits
 \end{description}
 
 This flags register controls behaviour of the device.\footnote{Currently, interrupts are only generated for frame transmission, so we technically only require a single bit for both of these flags. However, it is likely that in the future we will accept interrupts for events other than frame transmission, so a separate bit has been created.}
@@ -225,16 +214,16 @@ This flags register controls behaviour of the device.\footnote{Currently, interr
 0 & INT\_CTRL & Interrupt control & Set to enable interrupt generation. \\ \hline
 % FIXME trm_ctrl needs to be moved to usb interface
 1 & TRM\_CTRL & Transmission control & Set to enable image acquisition and transmission. \\ \hline
-2:7 & \multicolumn{3}{|c|}{Reserved} \\ \hline
+2:31 & \multicolumn{3}{|c|}{Reserved} \\ \hline
 \end{tabular}
 
 \subsubsection{DMA\_STS}
 
 \begin{description}
-\item[Address] BAR0 + 0x40
+\item[Address] BAR0 + 0x8
 \item[Driver access] RO
 \item[Default value] 0
-\item[Size] 1 byte
+\item[Size] 32 bits
 \end{description}
 
 Upon reception of an interrupt, the driver shall use the contents of this register to decide how to handle the interrupt.
@@ -246,6 +235,8 @@ The contents of this register are reset to 0 when read by the driver.
 0:1 & NEXT\_TRF & One-based ID of next frame to be transferred. 0 = no frame pending \\ \hline
 2 & DMA\_COMP & Completion of DMA transfer. \\ \hline
 3:7 & \multicolumn{2}{|c|}{Reserved} \\ \hline
+8:15 & TRP\_DROPPED & Triplets dropped counter. \\ \hline
+16:31 & \multicolumn{2}{|c|}{Reserved} \\ \hline
 \end{tabular}
 
 \paragraph{NEXT\_TRF}
@@ -260,20 +251,11 @@ When the FG has completed a DMA transfer, it shall set this bit and raise an int
 
 The driver shall not use this as an indication that the FG is ready to start the next DMA transfer. It only signifies completion of the previously programmed DMA operation.
 
-\subsubsection{TRP\_DROPPED}
-
-\begin{description}
-\item[Address] BAR0 + 0x41
-\item[Driver access] RO
-\item[Default value] 0
-\item[Size] 1 byte
-\end{description}
+\paragraph{TRP\_DROPPED}
 
 If the FG has to discard a triplet, it shall increment this counter by one.
 
 This would happen when the device has not been able to completely transfer a triplet into system RAM before the next triplet arrives.
-
-The contents of this register are reset to 0 when read by the driver.
 
 \subsection{Suggested hardware operation}
 
