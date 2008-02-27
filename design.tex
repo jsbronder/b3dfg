@@ -40,7 +40,7 @@ The bus master functionality will be used to write directly into system RAM, usi
 
 The bus target functionality will be used for the driver to request information (e.g. read registers) from the board. The EC220 forwards these requests to user logic.
 
-The PCI configuration space is handled entirely by the EC220, independantly of the user logic.
+The PCI configuration space is handled entirely by the EC220, independently of the user logic.
 
 \subsection{Software}
 
@@ -83,7 +83,7 @@ With these communication challenges understood, the suggested hardware design sh
 
 PCI is a shared bus, hence interrupt lines may be shared between different hardware devices. It is therefore important that if the FG generates an interrupt, the FG driver must be able to determine that the interrupt came from the FG (otherwise we risk accumulating unhandled interrupts, which crash the OS).
 
-The hardware design should make a concious effort to not generate more interrupts than strictly necessary.
+The hardware design should make a conscious effort to not generate more interrupts than strictly necessary.
 
 The device should include a register to control whether interrupts are enabled or not, and this should default to disabled.
 
@@ -93,7 +93,7 @@ Each PCI device has a series of identifiers generally used by drivers to identif
 
 \begin{description}
 %FIXME
-\item[Vendor ID] We will need to purchase our own vendor ID before production from the PCI SIG. During development, we can use the Euraka ID. (2 bytes)
+\item[Vendor ID] We will need to purchase our own vendor ID before production from the PCI SIG. During development, we can use the Eureka ID. (2 bytes)
 \item[Product ID] Use of this field is left up to the owner of the vendor ID. We should get an initial value, and not change this unless the communications protocols between driver and FG change significantly. (2 bytes)
 \item[Revision] We should use this as a version number, i.e. increment it when minor changes are made. However, if any of these changes affect the protocol significantly, we should change the product ID and reset the revision. (1 byte)
 \item[Subvendor ID/Subproduct ID] I think the above fields provide enough versioning, we can reserve these for future use. (2 bytes each)
@@ -109,7 +109,7 @@ Please ensure these guidelines are followed, as not doing so can cause some driv
 
 I will use the term \textbf{triplet} to indicate a set of 3 memory regions which form a group of 3 images captured at one point in time.
 
-I will use the term \textbf{frame} to refer to an indiviual image, a single memory region.
+I will use the term \textbf{frame} to refer to an individual image, a single memory region.
 
 A triplet therefore consists of 3 frames.
 
@@ -133,7 +133,7 @@ Table 4 (p7) of the EC220 documentation lists various signals that we should set
 We will use BAR0 to determine an address space for registers used for PCI read/write accesses from the driver.
 
 \begin{description}
-\item[Bit 34 (preftchable)] Unset, for non-prefetchable
+\item[Bit 34 (prefetchable)] Unset, for non-prefetchable
 \item[Bit 33] Set, to enable the BAR
 \item[Bit 32] Set, to appear as memory rather than ports
 \item[Bits 31:16] Set to 0, 64K should be enough for anybody
@@ -223,6 +223,7 @@ This flags register controls behaviour of the device.\footnote{Currently, interr
 \begin{tabular}{|c|c|c|c|}\hline
 \textbf{Bit} & \textbf{Mnemonic} & \textbf{Name} & \textbf{Description} \\ \hline
 0 & INT\_CTRL & Interrupt control & Set to enable interrupt generation. \\ \hline
+% FIXME trm_ctrl needs to be moved to usb interface
 1 & TRM\_CTRL & Transmission control & Set to enable image acquisition and transmission. \\ \hline
 2:7 & \multicolumn{3}{|c|}{Reserved} \\ \hline
 \end{tabular}
@@ -298,7 +299,7 @@ The FG shall capture 3 images simultaneously (one from each camera) but these fr
 
 The FG shall proceed to capture a triplet into local buffers. When complete, the FG can start transferring these into memory. It shall first inform the system of the availability of a frame from camera 1, by setting \texttt{DMA\_STS:NEXT\_TRF} to 1 and raising an interrupt.
 
-Immediately after, it is expected that the driver will negociate the DMA transfer and write the appropriate values into the EC220 DMA registers. When the start bit is raised, the FG shall start the data transfer.
+Immediately after, it is expected that the driver will negotiate the DMA transfer and write the appropriate values into the EC220 DMA registers. When the start bit is raised, the FG shall start the data transfer.
 
 When the DMA transfer is complete, the FG shall set \texttt{DMA\_STS:DMA\_COMP}. The frame from camera 2 can now be transferred, so the FG shall set \texttt{DMA\_STS:NEXT\_TRF} to 2. At this point an interrupt shall be raised.
 %FIXME ok to raise 2 above
@@ -486,7 +487,7 @@ This ioctl shall return the size of a single buffer.
 
 \paragraph{SET\_BUFFERS}
 
-This ioctl shall be used to allocate a number of buffers in memory. Further invokations shall change the number of allocated buffers (by allocating more or freeing existing ones). This can only be called when transmission is disabled and will dequeue any buffers that have been queued.
+This ioctl shall be used to allocate a number of buffers in memory. Further invocations shall change the number of allocated buffers (by allocating more or freeing existing ones). This can only be called when transmission is disabled and will dequeue any buffers that have been queued.
 
 \paragraph{QUEUE\_BUFFER}
 
