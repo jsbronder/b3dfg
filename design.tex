@@ -212,9 +212,7 @@ This flags register controls behaviour of the device.\footnote{Currently, interr
 \begin{tabular}{|c|c|c|c|}\hline
 \textbf{Bit} & \textbf{Mnemonic} & \textbf{Name} & \textbf{Description} \\ \hline
 0 & INT\_CTRL & Interrupt control & Set to enable interrupt generation. \\ \hline
-% FIXME trm_ctrl needs to be moved to usb interface
-1 & TRM\_CTRL & Transmission control & Set to enable image acquisition and transmission. \\ \hline
-2:31 & \multicolumn{3}{|c|}{Reserved} \\ \hline
+1:31 & \multicolumn{3}{|c|}{Reserved} \\ \hline
 \end{tabular}
 
 \subsubsection{DMA\_STS}
@@ -235,6 +233,7 @@ The contents of this register are reset to 0 when read by the driver.
 0:1 & NEXT\_TRF & One-based ID of next frame to be transferred. 0 = no frame pending \\ \hline
 2 & DMA\_COMP & Completion of DMA transfer. \\ \hline
 3:7 & \multicolumn{2}{|c|}{Reserved} \\ \hline
+% FIXME: TRP dropped might overflow
 8:15 & TRP\_DROPPED & Triplets dropped counter. \\ \hline
 16:31 & \multicolumn{2}{|c|}{Reserved} \\ \hline
 \end{tabular}
@@ -269,13 +268,9 @@ Generally, an interrupt is raised for readiness of a frame to be copied into sys
 
 Whenever read by the system, \texttt{DMA\_STS} and \texttt{TRP\_DROPPED} must be reset to 0 after the current value has been supplied.
 
-\subsubsection{Starting image capture}
-
-Image acquisition shall be started when \texttt{HW\_CTRL:TRM\_CTRL} is set, and shall stop when this bit is unset.
-
 \subsubsection{Image capture}
 
-The FG shall start acquiring images when \texttt{HW\_CTRL:TRM\_CTRL} is set, and shall stop acquiring images when this bit is unset.
+The FG interface to start and stop image capture is not visible over the PCI bus. Instead, the USB-accessible microcontroller will start and stop image acquisition.
 
 The FG shall capture 3 images simultaneously (one from each camera), and all of
 these frames become "ready" in the FG internal memory at the same point in time, but these individual frames are presented to the system individually.
@@ -381,7 +376,7 @@ The driver shall read the frame size from \texttt{FRM\_SIZE} and reserve a serie
 
 \subsubsection{Enabling image transmission}
 
-When ready to process images, the driver shall set the \texttt{INT\_CTRL} and \texttt{TRM\_CTRL} bits in \texttt{HW\_CTRL}.
+When ready to process images, the driver shall set the \texttt{INT\_CTRL} bit in \texttt{HW\_CTRL}. Image acqusition will actually start when the software later sends a command to the microcontroller over the USB bus (out of the scope of the document).
 
 \subsubsection{Interrupt handling}
 
@@ -397,9 +392,9 @@ If \textbf{DMA\_STS:DMA\_COMP} is nonzero, the driver shall observe that the pre
 
 \subsubsection{Ending transmission}
 
-When the image capture session is to be terminated, the driver shall clear the \texttt{INT\_CTRL} and \texttt{TRM\_CTRL} bits in the \texttt{HW\_CTRL} register.
+When the image capture session is to be terminated, the driver shall clear the \texttt{INT\_CTRL} bit in the \texttt{HW\_CTRL} register. The driver shall then read \texttt{PL\_DROPPED} in order to reset its value.
 
-The driver shall then read \texttt{PL\_DROPPED} in order to reset its value.
+It is assumed that the higher level software will have already stopped image acqusition by sending a command to the microcontroller over the USB bus.
 
 \subsubsection{User functionality}
 
