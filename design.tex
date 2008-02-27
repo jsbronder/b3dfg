@@ -295,7 +295,8 @@ Image acquisition shall be started when \texttt{HW\_CTRL:TRM\_CTRL} is set, and 
 
 The FG shall start acquiring images when \texttt{HW\_CTRL:TRM\_CTRL} is set, and shall stop acquiring images when this bit is unset.
 
-The FG shall capture 3 images simultaneously (one from each camera) but these frames are presented to the system individually.
+The FG shall capture 3 images simultaneously (one from each camera), and all of
+these frames become "ready" in the FG internal memory at the same point in time, but these individual frames are presented to the system individually.
 
 The FG shall proceed to capture a triplet into local buffers. When complete, the FG can start transferring these into memory. It shall first inform the system of the availability of a frame from camera 1, by setting \texttt{DMA\_STS:NEXT\_TRF} to 1 and raising an interrupt.
 
