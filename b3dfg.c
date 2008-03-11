@@ -105,6 +105,7 @@ static int __devinit b3dfg_probe(struct pci_dev *pdev,
 
 	b3dfg_devs[minor] = b3d_dev;
 	pci_set_drvdata(pdev, b3d_dev);
+	printk(KERN_INFO PREFIX "adding device %u\n", minor);
 	return 0;
 
 err_cdev_del:
@@ -126,6 +127,7 @@ static void __devexit b3dfg_remove(struct pci_dev *pdev)
 	b3dfg_devs[minor] = NULL;
 	kfree(b3d_dev);
 	pci_disable_device(pdev);
+	printk(KERN_INFO PREFIX "removing device %u\n", minor);
 }
 
 static struct pci_device_id b3dfg_ids[] = {
@@ -160,6 +162,7 @@ static int __init b3dfg_module_init(void)
 		goto out_class;
 
 	b3dfg_major = MAJOR(first_dev);
+	printk(KERN_INFO PREFIX "loaded\n");
 	return 0;
 out_class:
 	class_destroy(b3dfg_class);
@@ -171,6 +174,7 @@ out_chrdev:
 static void __exit b3dfg_module_exit(void)
 {
 	pci_unregister_driver(&b3dfg_driver);
+	printk(KERN_INFO PREFIX "unloaded\n");
 }
 
 MODULE_AUTHOR("Daniel Drake <ddrake@brontes3d.com>");
