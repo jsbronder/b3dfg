@@ -174,6 +174,8 @@ out_chrdev:
 static void __exit b3dfg_module_exit(void)
 {
 	pci_unregister_driver(&b3dfg_driver);
+	unregister_chrdev_region(MKDEV(b3dfg_major, 0), B3DFG_MAX_MINORS);
+	class_destroy(b3dfg_class);
 	printk(KERN_INFO PREFIX "unloaded\n");
 }
 
