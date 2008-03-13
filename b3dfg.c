@@ -1,7 +1,22 @@
-/*
- * b3dfg: Brontes Frame Grabber driver
+ /*
+ * Brontes PCI frame grabber driver
  *
- * Private software; not distributable
+ * Copyright (C) 2008 3M Company
+ * Contact: Daniel Drake <ddrake@brontes3d.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
  */
 
 #include <linux/device.h>
@@ -13,6 +28,7 @@
 #include <linux/cdev.h>
 
 #define DRIVER_NAME "b3dfg"
+#define PFX DRIVER_NAME ": "
 #define B3DFG_MAX_DEVS 4
 
 struct b3dfg_dev {
@@ -23,7 +39,7 @@ struct b3dfg_dev {
 static struct class *b3dfg_class;
 static dev_t b3dfg_devt;
 
-static const struct pci_device_id pci_ids[] __devinitdata = {
+static const struct pci_device_id b3dfg_ids[] __devinitdata = {
 	{ PCI_DEVICE(0x1901, 0x0001) },
 	{ },
 };
@@ -61,7 +77,7 @@ static int __devinit b3dfg_probe(struct pci_dev *pdev,
 	if (fgdev == NULL)
 		return -ENOMEM;
 
-	printk(KERN_INFO DRIVER_NAME ": probe %s\n", pci_name(pdev));
+	printk(KERN_INFO PFX "probe %s\n", pci_name(pdev));
 
 	cdev_init(&fgdev->chardev, &b3dfg_fops);
 	fgdev->chardev.owner = THIS_MODULE;
@@ -97,7 +113,7 @@ static void __devexit b3dfg_remove(struct pci_dev *pdev)
 {
 	struct b3dfg_dev *fgdev = pci_get_drvdata(pdev);
 
-	printk(KERN_INFO DRIVER_NAME ": remove\n");
+	printk(KERN_INFO PFX "remove\n");
 
 	pci_disable_device(pdev);
 	class_device_unregister(fgdev->classdev);
@@ -108,16 +124,16 @@ static void __devexit b3dfg_remove(struct pci_dev *pdev)
 
 static struct pci_driver b3dfg_driver = {
 	.name = DRIVER_NAME,
-	.id_table = pci_ids,
+	.id_table = b3dfg_ids,
 	.probe = b3dfg_probe,
 	.remove = b3dfg_remove,
 };
 
-static int __init b3dfg_init(void)
+static int __init b3dfg_module_init(void)
 {
 	int r;
 
-	printk(KERN_INFO DRIVER_NAME " loaded\n");
+	printk(KERN_INFO PFX "loaded\n");
 
 	b3dfg_class = class_create(THIS_MODULE, DRIVER_NAME);
 	if (IS_ERR(b3dfg_class))
@@ -140,18 +156,18 @@ err1:
 	return r;
 }
 
-static void __exit b3dfg_exit(void)
+static void __exit b3dfg_module_exit(void)
 {
+	printk(KERN_INFO PFX "unloaded\n");
 	pci_unregister_driver(&b3dfg_driver);
 	unregister_chrdev_region(b3dfg_devt, B3DFG_MAX_DEVS);
 	class_destroy(b3dfg_class);
 }
 
-module_init(b3dfg_init);
-module_exit(b3dfg_exit);
-
+module_init(b3dfg_module_init);
+module_exit(b3dfg_module_exit);
 MODULE_AUTHOR("Daniel Drake <ddrake@brontes3d.com>");
 MODULE_DESCRIPTION("Brontes frame grabber driver");
 MODULE_LICENSE("GPL");
-MODULE_DEVICE_TABLE(pci, pci_ids);
+MODULE_DEVICE_TABLE(pci, b3dfg_ids);
 
