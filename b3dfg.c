@@ -53,6 +53,7 @@ static int b3dfg_release(struct inode *inode, struct file *file)
 }
 
 struct file_operations b3dfg_fops = {
+	.owner = THIS_MODULE,
 	.open = b3dfg_open,
 	.release = b3dfg_release,
 };
