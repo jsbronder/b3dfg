@@ -21,6 +21,7 @@
 
 #include <linux/device.h>
 #include <linux/fs.h>
+#include <linux/interrupt.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/pci.h>
@@ -65,6 +66,11 @@ static const struct pci_device_id b3dfg_ids[] __devinitdata = {
 static u32 b3dfg_read32(struct b3dfg_dev *fgdev, u8 reg)
 {
 	return (uint32_t) ioread32(fgdev->regs + reg);
+}
+
+static irqreturn_t b3dfg_intr(int irq, void *dev_id)
+{
+	return IRQ_HANDLED;
 }
 
 static int b3dfg_open(struct inode *inode, struct file *filp)
@@ -143,11 +149,21 @@ static int __devinit b3dfg_probe(struct pci_dev *pdev,
 		goto err4;
 	}
 
+
 	fgdev->pdev = pdev;
 	pci_set_drvdata(pdev, fgdev);
+
+	r = request_irq(pdev->irq, b3dfg_intr, IRQF_SHARED, DRIVER_NAME, fgdev);
+	if (r) {
+		printk(KERN_ERR PFX "couldn't request irq %d\n", pdev->irq);
+		goto err5;
+	}
+
 	b3dfg_test(fgdev);
 	return 0;
 
+err5:
+	iounmap(fgdev->regs);
 err4:
 	pci_disable_device(pdev);
 err3:
@@ -165,6 +181,7 @@ static void __devexit b3dfg_remove(struct pci_dev *pdev)
 
 	printk(KERN_INFO PFX "remove\n");
 
+	free_irq(pdev->irq, fgdev);
 	iounmap(fgdev->regs);
 	pci_disable_device(pdev);
 	class_device_unregister(fgdev->classdev);
