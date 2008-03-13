@@ -32,8 +32,10 @@
 #define B3DFG_MAX_DEVS 4
 
 struct b3dfg_dev {
+	struct pci_dev *pdev;
     struct cdev chardev;
     struct class_device *classdev;
+	void __iomem *regs;
 };
 
 static struct class *b3dfg_class;
@@ -63,6 +65,12 @@ static struct file_operations b3dfg_fops = {
 	.open = b3dfg_open,
 	.release = b3dfg_release,
 };
+
+static void b3dfg_test(struct b3dfg_dev *fgdev)
+{
+	unsigned int val = ioread32(fgdev->regs);
+	printk("frm_size %d\n", val);
+}
 
 static int __devinit b3dfg_probe(struct pci_dev *pdev,
 	const struct pci_device_id *id)
@@ -96,8 +104,16 @@ static int __devinit b3dfg_probe(struct pci_dev *pdev,
 	r = pci_enable_device(pdev);
 	if (r)
 		goto err3;
+	
+	fgdev->regs = ioremap_nocache(pci_resource_start(pdev, 0), 0x10000);
+	if (!fgdev->regs) {
+		printk("ioremap failed\n");
+		goto err3; // FIXME disable device
+	}
 
+	fgdev->pdev = pdev;
 	pci_set_drvdata(pdev, fgdev);
+	b3dfg_test(fgdev);
 	return 0;
 
 err3:
@@ -115,6 +131,7 @@ static void __devexit b3dfg_remove(struct pci_dev *pdev)
 
 	printk(KERN_INFO PFX "remove\n");
 
+	iounmap(fgdev->regs);
 	pci_disable_device(pdev);
 	class_device_unregister(fgdev->classdev);
 	cdev_del(&fgdev->chardev);
