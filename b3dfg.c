@@ -131,7 +131,7 @@ static void __devexit b3dfg_remove(struct pci_dev *pdev)
 	printk(KERN_INFO PREFIX "removing device %u\n", minor);
 }
 
-static struct pci_device_id b3dfg_ids[] = {
+static struct pci_device_id b3dfg_ids[] __devinitdata = {
 	{ PCI_DEVICE(0x1901, 0x0001) },
 	{ 0, },
 };
