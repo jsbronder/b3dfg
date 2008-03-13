@@ -31,6 +31,22 @@
 #define PFX DRIVER_NAME ": "
 #define B3DFG_MAX_DEVS 4
 
+#define B3DFG_BAR_REGS	0
+#define B3DFG_REGS_LENGTH 0x10000
+
+enum {
+	/* number of 4kb pages per frame */
+	B3D_REG_FRM_SIZE = 0x0,
+
+	/* bit 0: set to enable interrupts */
+	B3D_REG_HW_CTRL = 0x4,
+
+	/* bit 0-1 - 1-based ID of next pending frame transfer (0 = nothing pending)
+	 * bit 2 indicates the previous DMA transfer has completed
+	 * bit 8:15 - counter of number of discarded triplets */
+	B3D_REG_DMA_STS = 0x8,
+};
+
 struct b3dfg_dev {
 	struct pci_dev *pdev;
     struct cdev chardev;
@@ -45,6 +61,11 @@ static const struct pci_device_id b3dfg_ids[] __devinitdata = {
 	{ PCI_DEVICE(0x1901, 0x0001) },
 	{ },
 };
+
+static u32 b3dfg_read32(struct b3dfg_dev *fgdev, u8 reg)
+{
+	return (uint32_t) ioread32(fgdev->regs + reg);
+}
 
 static int b3dfg_open(struct inode *inode, struct file *filp)
 {
@@ -68,8 +89,8 @@ static struct file_operations b3dfg_fops = {
 
 static void b3dfg_test(struct b3dfg_dev *fgdev)
 {
-	unsigned int val = ioread32(fgdev->regs);
-	printk("frm_size %d\n", val);
+	u32 frm_size = b3dfg_read32(fgdev, B3D_REG_FRM_SIZE);
+	printk("frm_size %d\n", frm_size);
 }
 
 static int __devinit b3dfg_probe(struct pci_dev *pdev,
@@ -105,10 +126,21 @@ static int __devinit b3dfg_probe(struct pci_dev *pdev,
 	if (r)
 		goto err3;
 	
-	fgdev->regs = ioremap_nocache(pci_resource_start(pdev, 0), 0x10000);
+	if (pci_resource_len(pdev, B3DFG_BAR_REGS) != B3DFG_REGS_LENGTH) {
+		printk(KERN_ERR PFX "invalid register resource size\n");
+		goto err4;
+	}
+
+	if (pci_resource_flags(pdev, B3DFG_BAR_REGS) != IORESOURCE_MEM) {
+		printk(KERN_ERR PFX "invalid resource flags");
+		goto err4;
+	}
+
+	fgdev->regs = ioremap_nocache(pci_resource_start(pdev, B3DFG_BAR_REGS),
+		B3DFG_REGS_LENGTH);
 	if (!fgdev->regs) {
-		printk("ioremap failed\n");
-		goto err3; // FIXME disable device
+		printk(KERN_ERR PFX "regs ioremap failed\n");
+		goto err4;
 	}
 
 	fgdev->pdev = pdev;
@@ -116,6 +148,8 @@ static int __devinit b3dfg_probe(struct pci_dev *pdev,
 	b3dfg_test(fgdev);
 	return 0;
 
+err4:
+	pci_disable_device(pdev);
 err3:
 	class_device_unregister(fgdev->classdev);
 err2:
