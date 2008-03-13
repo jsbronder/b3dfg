@@ -32,7 +32,8 @@
 static struct class *b3dfg_class;
 
 struct b3dfg_dev {
-	struct cdev cdev;
+	struct cdev chardev;
+	struct class_device *classdev;
 };
 
 struct b3dfg_dev *b3dfg_devs[B3DFG_MAX_MINORS];
@@ -41,7 +42,7 @@ static int b3dfg_major;
 static int b3dfg_open(struct inode *inode, struct file *file)
 {
 	struct b3dfg_dev *b3d_dev = container_of(inode->i_cdev,
-		struct b3dfg_dev, cdev);
+		struct b3dfg_dev, chardev);
 	file->private_data = b3d_dev;
 	return 0;
 }
@@ -72,7 +73,6 @@ static int __devinit b3dfg_probe(struct pci_dev *pdev,
 	int r;
 	unsigned int minor;
 	struct b3dfg_dev *b3d_dev;
-	struct device *sdev;
 
 	r = pci_enable_device(pdev);
 	if (r < 0)
@@ -89,17 +89,17 @@ static int __devinit b3dfg_probe(struct pci_dev *pdev,
 	if (!b3d_dev)
 		goto err_disable;
 
-	cdev_init(&b3d_dev->cdev, &b3dfg_fops);
-	b3d_dev->cdev.owner = THIS_MODULE;
+	cdev_init(&b3d_dev->chardev, &b3dfg_fops);
+	b3d_dev->chardev.owner = THIS_MODULE;
 
-	r = cdev_add(&b3d_dev->cdev, MKDEV(b3dfg_major, minor), 1);
+	r = cdev_add(&b3d_dev->chardev, MKDEV(b3dfg_major, minor), 1);
 	if (r < 0)
 		goto err_free_dev;
 
-	sdev = device_create(b3dfg_class, &pdev->dev,
-		MKDEV(b3dfg_major, minor), DRVNAME "%u", minor);
-	if (IS_ERR(sdev)) {
-		r = PTR_ERR(sdev);
+	b3d_dev->classdev = class_device_create(b3dfg_class, NULL,
+		MKDEV(b3dfg_major, minor), &pdev->dev, DRVNAME "%u", minor);
+	if (IS_ERR(b3d_dev->classdev)) {
+		r = PTR_ERR(b3d_dev->classdev);
 		goto err_cdev_del;
 	}
 
@@ -109,7 +109,7 @@ static int __devinit b3dfg_probe(struct pci_dev *pdev,
 	return 0;
 
 err_cdev_del:
-	cdev_del(&b3d_dev->cdev);
+	cdev_del(&b3d_dev->chardev);
 err_free_dev:
 	kfree(b3d_dev);
 err_disable:
@@ -120,10 +120,10 @@ err_disable:
 static void __devexit b3dfg_remove(struct pci_dev *pdev)
 {
 	struct b3dfg_dev *b3d_dev = pci_get_drvdata(pdev);
-	unsigned int minor = MINOR(b3d_dev->cdev.dev);
+	unsigned int minor = MINOR(b3d_dev->chardev.dev);
 
-	device_destroy(b3dfg_class, MKDEV(b3dfg_major, minor));
-	cdev_del(&b3d_dev->cdev);
+	class_device_unregister(b3d_dev->classdev);
+	cdev_del(&b3d_dev->chardev);
 	b3dfg_devs[minor] = NULL;
 	kfree(b3d_dev);
 	pci_disable_device(pdev);
