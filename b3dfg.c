@@ -112,7 +112,8 @@ static int __devinit b3dfg_probe(struct pci_dev *pdev,
 	if (fgdev == NULL)
 		return -ENOMEM;
 
-	printk(KERN_INFO PFX "probe %s\n", pci_name(pdev));
+	printk(KERN_INFO PFX "probe device at %s with IRQ %d\n",
+		pci_name(pdev), pdev->irq);
 
 	cdev_init(&fgdev->chardev, &b3dfg_fops);
 	fgdev->chardev.owner = THIS_MODULE;
