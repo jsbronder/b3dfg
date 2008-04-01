@@ -22,11 +22,14 @@
 #include <linux/device.h>
 #include <linux/fs.h>
 #include <linux/interrupt.h>
+#include <linux/ioctl.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/pci.h>
 #include <linux/types.h>
 #include <linux/cdev.h>
+
+#include <asm/uaccess.h>
 
 #define DRIVER_NAME "b3dfg"
 #define PFX DRIVER_NAME ": "
@@ -34,6 +37,10 @@
 
 #define B3DFG_BAR_REGS	0
 #define B3DFG_REGS_LENGTH 0x10000
+
+#define B3DFG_IOC_MAGIC		0xb3 /* dfg :-) */
+#define B3DFG_IOCGFRMSZ		_IOR(B3DFG_IOC_MAGIC, 1, int)
+#define B3DFG_IOCSNUMBUFS	_IOW(B3DFG_IOC_MAGIC, 2, int)
 
 enum {
 	/* number of 4kb pages per frame */
@@ -53,6 +60,11 @@ struct b3dfg_dev {
     struct cdev chardev;
     struct class_device *classdev;
 	void __iomem *regs;
+
+	int frame_size;
+	
+	int num_buffers;
+	unsigned char **buffers;
 };
 
 static struct class *b3dfg_class;
@@ -63,9 +75,67 @@ static const struct pci_device_id b3dfg_ids[] __devinitdata = {
 	{ },
 };
 
+/**** register I/O ****/
+
 static u32 b3dfg_read32(struct b3dfg_dev *fgdev, u8 reg)
 {
 	return (uint32_t) ioread32(fgdev->regs + reg);
+}
+
+/**** buffer management ****/
+
+static long set_num_buffers(struct b3dfg_dev *fgdev, int num_buffers)
+{
+	int i;
+	int frame_size = fgdev->frame_size;
+	unsigned char **newbufs;
+
+	printk(KERN_INFO PFX "set %d buffers\n", num_buffers);
+
+	/* FIXME check transmission is not currently enabled */
+
+	if (!fgdev->buffers) {
+		/* no buffers allocated yet */
+		fgdev->buffers = kmalloc(num_buffers * sizeof(unsigned char *),
+			GFP_KERNEL);
+		if (!fgdev->buffers)
+			return -ENOMEM;
+
+		for (i = 0; i < num_buffers; i++) {
+			fgdev->buffers[i] = kmalloc(frame_size, GFP_KERNEL);
+			if (!fgdev->buffers[i])
+				printk("failed kmalloc\n");
+			/* FIXME return value checking */
+		}
+	} else if (num_buffers == 0) {
+		for (i = 0; i < fgdev->num_buffers; i++)
+			kfree(fgdev->buffers[i]);
+		kfree(fgdev->buffers);
+		fgdev->buffers = NULL;
+	} else if (fgdev->num_buffers < num_buffers) {
+		/* app requested more buffers than we currently have allocated */
+		newbufs = krealloc(fgdev->buffers,
+			num_buffers * sizeof(unsigned char *), GFP_KERNEL);
+		if (!newbufs)
+			return -ENOMEM;
+		for (i = fgdev->num_buffers; i < num_buffers; i++) {
+			newbufs[i] = kmalloc(frame_size, GFP_KERNEL);
+			if (!newbufs[i])
+				printk("failed kmalloc\n");
+			/* FIXME return value checking */
+		}
+		fgdev->buffers = newbufs;
+	} else if (fgdev->num_buffers > num_buffers) {
+		/* app requests a decrease in buffers */
+		for (i = num_buffers; i < fgdev->num_buffers; i++)
+			kfree(fgdev->buffers[i]);
+		newbufs = krealloc(fgdev->buffers,
+			num_buffers * sizeof(unsigned char *), GFP_KERNEL);
+		/* FIXME return value checking */
+		fgdev->buffers = newbufs;
+	}
+	fgdev->num_buffers = num_buffers;
+	return 0;
 }
 
 static irqreturn_t b3dfg_intr(int irq, void *dev_id)
@@ -84,19 +154,39 @@ static int b3dfg_open(struct inode *inode, struct file *filp)
 
 static int b3dfg_release(struct inode *inode, struct file *filp)
 {
-	return 0;
+	struct b3dfg_dev *fgdev = filp->private_data;
+	return set_num_buffers(fgdev, 0);
+}
+
+static long b3dfg_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
+{
+	struct b3dfg_dev *fgdev = filp->private_data;
+	printk(KERN_INFO PFX "ioctl %x %ld\n", cmd, arg);
+	switch (cmd) {
+	case B3DFG_IOCGFRMSZ:
+		printk("get frame size\n");
+		return __put_user(fgdev->frame_size, (int __user *) arg);
+	case B3DFG_IOCSNUMBUFS:
+		printk("set num buffers\n");
+		return set_num_buffers(fgdev, (int) arg);
+	default:
+		printk(KERN_ERR PFX "unrecognised ioctl %x\n", cmd);
+		return -EINVAL;
+	}
 }
 
 static struct file_operations b3dfg_fops = {
 	.owner = THIS_MODULE,
 	.open = b3dfg_open,
 	.release = b3dfg_release,
+	.unlocked_ioctl = b3dfg_ioctl,
 };
 
-static void b3dfg_test(struct b3dfg_dev *fgdev)
+static void b3dfg_init_dev(struct b3dfg_dev *fgdev)
 {
 	u32 frm_size = b3dfg_read32(fgdev, B3D_REG_FRM_SIZE);
 	printk("frm_size %d\n", frm_size);
+	fgdev->frame_size = frm_size * 4096;
 }
 
 static int __devinit b3dfg_probe(struct pci_dev *pdev,
@@ -150,7 +240,6 @@ static int __devinit b3dfg_probe(struct pci_dev *pdev,
 		goto err4;
 	}
 
-
 	fgdev->pdev = pdev;
 	pci_set_drvdata(pdev, fgdev);
 
@@ -160,7 +249,7 @@ static int __devinit b3dfg_probe(struct pci_dev *pdev,
 		goto err5;
 	}
 
-	b3dfg_test(fgdev);
+	b3dfg_init_dev(fgdev);
 	return 0;
 
 err5:
@@ -187,7 +276,6 @@ static void __devexit b3dfg_remove(struct pci_dev *pdev)
 	pci_disable_device(pdev);
 	class_device_unregister(fgdev->classdev);
 	cdev_del(&fgdev->chardev);
-
 	kfree(fgdev);
 }
 
