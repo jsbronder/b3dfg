@@ -166,9 +166,10 @@ static void set_transmission(struct b3dfg_dev *fgdev, int enabled)
 static irqreturn_t b3dfg_intr(int irq, void *dev_id)
 {
 	struct b3dfg_dev *fgdev = dev_id;
-	if (!fgdev->transmission_enabled)
+	if (unlikely(!fgdev->transmission_enabled))
 		return IRQ_NONE;
 
+	printk(KERN_INFO PFX "got interrupt\n");
 	return IRQ_HANDLED;
 }
 
