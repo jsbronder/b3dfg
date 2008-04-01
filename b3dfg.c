@@ -56,6 +56,14 @@ enum {
 	B3D_REG_DMA_STS = 0x8,
 };
 
+#define B3D_BUFFER_STATUS_QUEUED		(1<<0)
+#define B3D_BUFFER_STATUS_POPULATED		(1<<1)
+
+struct b3dfg_buffer {
+	unsigned char *addr;
+	unsigned char status;
+};
+
 struct b3dfg_dev {
 	struct pci_dev *pdev;
     struct cdev chardev;
@@ -65,7 +73,7 @@ struct b3dfg_dev {
 	int frame_size;
 	
 	int num_buffers;
-	unsigned char **buffers;
+	struct b3dfg_buffer *buffers;
 	int transmission_enabled;
 };
 
@@ -95,7 +103,7 @@ static long set_num_buffers(struct b3dfg_dev *fgdev, int num_buffers)
 {
 	int i;
 	int frame_size = fgdev->frame_size;
-	unsigned char **newbufs;
+	struct b3dfg_buffer *newbufs;
 
 	printk(KERN_INFO PFX "set %d buffers\n", num_buffers);
 	if (fgdev->transmission_enabled) {
@@ -104,45 +112,47 @@ static long set_num_buffers(struct b3dfg_dev *fgdev, int num_buffers)
 		return -EBUSY;
 	}
 
-	/* FIXME check transmission is not currently enabled */
-
 	if (!fgdev->buffers) {
 		/* no buffers allocated yet */
-		fgdev->buffers = kmalloc(num_buffers * sizeof(unsigned char *),
+		fgdev->buffers = kmalloc(num_buffers * sizeof(struct b3dfg_buffer),
 			GFP_KERNEL);
 		if (!fgdev->buffers)
 			return -ENOMEM;
 
 		for (i = 0; i < num_buffers; i++) {
-			fgdev->buffers[i] = kmalloc(frame_size, GFP_KERNEL);
-			if (!fgdev->buffers[i])
+			struct b3dfg_buffer *buf = &fgdev->buffers[i];
+			buf->addr = kmalloc(frame_size, GFP_KERNEL);
+			if (!buf->addr)
 				printk("failed kmalloc\n");
 			/* FIXME return value checking */
+			buf->status = 0;
 		}
 	} else if (num_buffers == 0) {
 		for (i = 0; i < fgdev->num_buffers; i++)
-			kfree(fgdev->buffers[i]);
+			kfree(fgdev->buffers[i].addr);
 		kfree(fgdev->buffers);
 		fgdev->buffers = NULL;
 	} else if (fgdev->num_buffers < num_buffers) {
 		/* app requested more buffers than we currently have allocated */
 		newbufs = krealloc(fgdev->buffers,
-			num_buffers * sizeof(unsigned char *), GFP_KERNEL);
+			num_buffers * sizeof(struct b3dfg_buffer), GFP_KERNEL);
 		if (!newbufs)
 			return -ENOMEM;
 		for (i = fgdev->num_buffers; i < num_buffers; i++) {
-			newbufs[i] = kmalloc(frame_size, GFP_KERNEL);
-			if (!newbufs[i])
+			struct b3dfg_buffer *buf = &newbufs[i];
+			buf->addr = kmalloc(frame_size, GFP_KERNEL);
+			if (!buf->addr)
 				printk("failed kmalloc\n");
 			/* FIXME return value checking */
+			buf->status = 0;
 		}
 		fgdev->buffers = newbufs;
 	} else if (fgdev->num_buffers > num_buffers) {
 		/* app requests a decrease in buffers */
 		for (i = num_buffers; i < fgdev->num_buffers; i++)
-			kfree(fgdev->buffers[i]);
+			kfree(fgdev->buffers[i].addr);
 		newbufs = krealloc(fgdev->buffers,
-			num_buffers * sizeof(unsigned char *), GFP_KERNEL);
+			num_buffers * sizeof(struct b3dfg_buffer), GFP_KERNEL);
 		/* FIXME return value checking */
 		fgdev->buffers = newbufs;
 	}
