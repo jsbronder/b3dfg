@@ -127,12 +127,24 @@ static void free_buffer(struct b3dfg_buffer *buf)
 		kfree(buf->frame[i]);
 }
 
+static void free_all_buffers(struct b3dfg_dev *fgdev)
+{
+	int i;
+	for (i = 0; i < fgdev->num_buffers; i++)
+		free_buffer(&fgdev->buffers[i]);
+
+	kfree(fgdev->buffers);
+	fgdev->buffers = NULL;
+	fgdev->num_buffers = 0;
+}
+
 /* initialize a buffer: allocate its frames, set default values */
 static int init_buffer(struct b3dfg_dev *fgdev, struct b3dfg_buffer *buf)
 {
 	int frame_size = fgdev->frame_size;
 	int i;
 
+	memset(buf, 0, sizeof(struct b3dfg_buffer));
 	for (i = 0; i < B3DFG_FRAMES_PER_BUFFER; i++) {
 		buf->frame[i] = kmalloc(frame_size, GFP_KERNEL);
 		if (!buf->frame[i]) {
@@ -142,7 +154,6 @@ static int init_buffer(struct b3dfg_dev *fgdev, struct b3dfg_buffer *buf)
 	}
 
 	INIT_LIST_HEAD(&buf->list);
-	buf->status = 0;
 	return 0;
 
 err:
@@ -150,9 +161,11 @@ err:
 	return -ENOMEM;
 }
 
+/* adjust the number of buffers, growing or shrinking the pool appropriately. */
 static int set_num_buffers(struct b3dfg_dev *fgdev, int num_buffers)
 {
 	int i;
+	int r;
 	struct b3dfg_buffer *newbufs;
 
 	printk(KERN_INFO PFX "set %d buffers\n", num_buffers);
@@ -170,36 +183,47 @@ static int set_num_buffers(struct b3dfg_dev *fgdev, int num_buffers)
 			return -ENOMEM;
 
 		for (i = 0; i < num_buffers; i++) {
-			init_buffer(fgdev, &fgdev->buffers[i]);
-			/* FIXME return value checking */
+			r = init_buffer(fgdev, &fgdev->buffers[i]);
+			if (r)
+				goto err;
 		}
 	} else if (num_buffers == 0) {
-		for (i = 0; i < fgdev->num_buffers; i++)
-			free_buffer(&fgdev->buffers[i]);
-		kfree(fgdev->buffers);
-		fgdev->buffers = NULL;
+		free_all_buffers(fgdev);
 	} else if (fgdev->num_buffers < num_buffers) {
 		/* app requested more buffers than we currently have allocated */
 		newbufs = krealloc(fgdev->buffers,
 			num_buffers * sizeof(struct b3dfg_buffer), GFP_KERNEL);
-		if (!newbufs)
-			return -ENOMEM;
+		if (!newbufs) {
+			r = -ENOMEM;
+			goto err;
+		}
+
 		for (i = fgdev->num_buffers; i < num_buffers; i++) {
-			init_buffer(fgdev, &newbufs[i]);
-			/* FIXME return value checking */
+			r = init_buffer(fgdev, &newbufs[i]);
+			if (r)
+				goto err;
 		}
 		fgdev->buffers = newbufs;
 	} else if (fgdev->num_buffers > num_buffers) {
 		/* app requests a decrease in buffers */
 		for (i = num_buffers; i < fgdev->num_buffers; i++)
 			free_buffer(&fgdev->buffers[i]);
+
 		newbufs = krealloc(fgdev->buffers,
 			num_buffers * sizeof(struct b3dfg_buffer), GFP_KERNEL);
-		/* FIXME return value checking */
+		if (!newbufs) {
+			r = -ENOMEM;
+			goto err;
+		}
+
 		fgdev->buffers = newbufs;
 	}
 	fgdev->num_buffers = num_buffers;
 	return 0;
+
+err:
+	free_all_buffers(fgdev);
+	return r;
 }
 
 /* queue a buffer to receive data */
