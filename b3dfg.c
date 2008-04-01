@@ -28,8 +28,14 @@
 #include <linux/pci.h>
 #include <linux/types.h>
 #include <linux/cdev.h>
+#include <linux/list.h>
 
 #include <asm/uaccess.h>
+
+/* TODO:
+ * buffers are triplets, not frames
+ * locking
+ */
 
 #define DRIVER_NAME "b3dfg"
 #define PFX DRIVER_NAME ": "
@@ -62,6 +68,7 @@ enum {
 struct b3dfg_buffer {
 	unsigned char *addr;
 	unsigned char status;
+	struct list_head list;
 };
 
 struct b3dfg_dev {
@@ -74,6 +81,7 @@ struct b3dfg_dev {
 	
 	int num_buffers;
 	struct b3dfg_buffer *buffers;
+	struct list_head buffer_queue;
 	int transmission_enabled;
 };
 
@@ -226,10 +234,13 @@ static struct file_operations b3dfg_fops = {
 	.unlocked_ioctl = b3dfg_ioctl,
 };
 
+/* initialize device and any data structures. called before any interrupts
+ * are enabled. */
 static void b3dfg_init_dev(struct b3dfg_dev *fgdev)
 {
 	u32 frm_size = b3dfg_read32(fgdev, B3D_REG_FRM_SIZE);
 	fgdev->frame_size = frm_size * 4096;
+	INIT_LIST_HEAD(&fgdev->buffer_queue);
 }
 
 static int __devinit b3dfg_probe(struct pci_dev *pdev,
@@ -285,6 +296,7 @@ static int __devinit b3dfg_probe(struct pci_dev *pdev,
 
 	fgdev->pdev = pdev;
 	pci_set_drvdata(pdev, fgdev);
+	b3dfg_init_dev(fgdev);
 
 	r = request_irq(pdev->irq, b3dfg_intr, IRQF_SHARED, DRIVER_NAME, fgdev);
 	if (r) {
@@ -292,7 +304,6 @@ static int __devinit b3dfg_probe(struct pci_dev *pdev,
 		goto err5;
 	}
 
-	b3dfg_init_dev(fgdev);
 	return 0;
 
 err5:
