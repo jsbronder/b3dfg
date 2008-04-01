@@ -41,6 +41,7 @@
 #define B3DFG_IOC_MAGIC		0xb3 /* dfg :-) */
 #define B3DFG_IOCGFRMSZ		_IOR(B3DFG_IOC_MAGIC, 1, int)
 #define B3DFG_IOCSNUMBUFS	_IOW(B3DFG_IOC_MAGIC, 2, int)
+#define B3DFG_IOCSTRANS		_IOW(B3DFG_IOC_MAGIC, 3, int)
 
 enum {
 	/* number of 4kb pages per frame */
@@ -65,6 +66,7 @@ struct b3dfg_dev {
 	
 	int num_buffers;
 	unsigned char **buffers;
+	int transmission_enabled;
 };
 
 static struct class *b3dfg_class;
@@ -82,6 +84,11 @@ static u32 b3dfg_read32(struct b3dfg_dev *fgdev, u8 reg)
 	return (uint32_t) ioread32(fgdev->regs + reg);
 }
 
+static void b3dfg_write32(struct b3dfg_dev *fgdev, u8 reg, u32 value)
+{
+	iowrite32(value, fgdev->regs + reg);
+}
+
 /**** buffer management ****/
 
 static long set_num_buffers(struct b3dfg_dev *fgdev, int num_buffers)
@@ -91,6 +98,11 @@ static long set_num_buffers(struct b3dfg_dev *fgdev, int num_buffers)
 	unsigned char **newbufs;
 
 	printk(KERN_INFO PFX "set %d buffers\n", num_buffers);
+	if (fgdev->transmission_enabled) {
+		printk(KERN_ERR PFX
+			"cannot set buffer count while transmission is enabled\n");
+		return -EBUSY;
+	}
 
 	/* FIXME check transmission is not currently enabled */
 
@@ -138,8 +150,25 @@ static long set_num_buffers(struct b3dfg_dev *fgdev, int num_buffers)
 	return 0;
 }
 
+static void set_transmission(struct b3dfg_dev *fgdev, int enabled)
+{
+	printk(KERN_INFO PFX "%s transmission\n",
+		(enabled) ? "enable" : "disable");
+	fgdev->transmission_enabled = enabled;
+	b3dfg_write32(fgdev, B3D_REG_HW_CTRL, enabled & 0x1);
+
+	/* reset dropped triplet counter */
+	/* FIXME will this throw away useful dma data too? */
+	if (!enabled)
+		b3dfg_read32(fgdev, B3D_REG_DMA_STS);
+}
+
 static irqreturn_t b3dfg_intr(int irq, void *dev_id)
 {
+	struct b3dfg_dev *fgdev = dev_id;
+	if (!fgdev->transmission_enabled)
+		return IRQ_NONE;
+
 	return IRQ_HANDLED;
 }
 
@@ -148,6 +177,7 @@ static int b3dfg_open(struct inode *inode, struct file *filp)
 	struct b3dfg_dev *fgdev =
 		container_of(inode->i_cdev, struct b3dfg_dev, chardev);
 
+	printk(KERN_INFO PFX "open\n");
 	filp->private_data = fgdev;
 	return 0;
 }
@@ -155,6 +185,8 @@ static int b3dfg_open(struct inode *inode, struct file *filp)
 static int b3dfg_release(struct inode *inode, struct file *filp)
 {
 	struct b3dfg_dev *fgdev = filp->private_data;
+	printk(KERN_INFO PFX "release\n");
+	set_transmission(fgdev, 0);
 	return set_num_buffers(fgdev, 0);
 }
 
@@ -164,11 +196,12 @@ static long b3dfg_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 	printk(KERN_INFO PFX "ioctl %x %ld\n", cmd, arg);
 	switch (cmd) {
 	case B3DFG_IOCGFRMSZ:
-		printk("get frame size\n");
 		return __put_user(fgdev->frame_size, (int __user *) arg);
 	case B3DFG_IOCSNUMBUFS:
-		printk("set num buffers\n");
 		return set_num_buffers(fgdev, (int) arg);
+	case B3DFG_IOCSTRANS:
+		set_transmission(fgdev, (int) arg);
+		return 0;
 	default:
 		printk(KERN_ERR PFX "unrecognised ioctl %x\n", cmd);
 		return -EINVAL;
@@ -185,7 +218,6 @@ static struct file_operations b3dfg_fops = {
 static void b3dfg_init_dev(struct b3dfg_dev *fgdev)
 {
 	u32 frm_size = b3dfg_read32(fgdev, B3D_REG_FRM_SIZE);
-	printk("frm_size %d\n", frm_size);
 	fgdev->frame_size = frm_size * 4096;
 }
 

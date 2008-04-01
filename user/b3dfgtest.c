@@ -6,9 +6,11 @@
 #include <sys/ioctl.h>
 #include <stdio.h>
 
-#define B3DFG_IOC_MAGIC     0xb3 /* dfg :-) */
-#define B3DFG_IOCGFRMSZ     _IOR(B3DFG_IOC_MAGIC, 1, int)
-#define B3DFG_IOCSNUMBUFS   _IOW(B3DFG_IOC_MAGIC, 2, int)
+#define B3DFG_IOC_MAGIC		0xb3 /* dfg :-) */
+#define B3DFG_IOCGFRMSZ		_IOR(B3DFG_IOC_MAGIC, 1, int)
+#define B3DFG_IOCSNUMBUFS	_IOW(B3DFG_IOC_MAGIC, 2, int)
+#define B3DFG_IOCSTRANS		_IOW(B3DFG_IOC_MAGIC, 3, int)
+
 static int fd;
 
 static void print_frame_size(void)
@@ -29,6 +31,15 @@ static void set_num_buffers(int num_buffers)
 		printf("set %d buffers result %d\n", num_buffers, r);
 }
 
+static void set_transmission(int enabled)
+{
+	int r = ioctl(fd, B3DFG_IOCSTRANS, enabled);
+	if (r < 0)
+		perror("set_transmission ioctl");
+	else
+		printf("set transmission %d result %d\n", enabled, r);
+}
+
 int main(void)
 {
 	fd = open("/dev/b3dfg0", O_RDONLY);
@@ -39,6 +50,7 @@ int main(void)
 
 	print_frame_size();
 	set_num_buffers(3);
+	set_transmission(1);
 
 	close(fd);
 }
