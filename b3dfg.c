@@ -33,13 +33,13 @@
 #include <asm/uaccess.h>
 
 /* TODO:
- * buffers are triplets, not frames
  * locking
  */
 
 #define DRIVER_NAME "b3dfg"
 #define PFX DRIVER_NAME ": "
 #define B3DFG_MAX_DEVS 4
+#define B3DFG_FRAMES_PER_BUFFER 3
 
 #define B3DFG_BAR_REGS	0
 #define B3DFG_REGS_LENGTH 0x10000
@@ -62,11 +62,11 @@ enum {
 	B3D_REG_DMA_STS = 0x8,
 };
 
-#define B3D_BUFFER_STATUS_QUEUED		(1<<0)
-#define B3D_BUFFER_STATUS_POPULATED		(1<<1)
+#define B3DFG_BUFFER_STATUS_QUEUED			(1<<0)
+#define B3DFG_BUFFER_STATUS_POPULATED		(1<<1)
 
 struct b3dfg_buffer {
-	unsigned char *addr;
+	unsigned char *frame[B3DFG_FRAMES_PER_BUFFER];
 	unsigned char status;
 	struct list_head list;
 };
@@ -107,10 +107,40 @@ static void b3dfg_write32(struct b3dfg_dev *fgdev, u8 reg, u32 value)
 
 /**** buffer management ****/
 
-static long set_num_buffers(struct b3dfg_dev *fgdev, int num_buffers)
+/* free the frames in a buffer */
+static void free_buffer(struct b3dfg_buffer *buf)
 {
 	int i;
+	for (i = 0; i < B3DFG_FRAMES_PER_BUFFER; i++)
+		kfree(buf->frame[i]);
+}
+
+/* initialize a buffer: allocate its frames, set default values */
+static int init_buffer(struct b3dfg_dev *fgdev, struct b3dfg_buffer *buf)
+{
 	int frame_size = fgdev->frame_size;
+	int i;
+
+	for (i = 0; i < B3DFG_FRAMES_PER_BUFFER; i++) {
+		buf->frame[i] = kmalloc(frame_size, GFP_KERNEL);
+		if (!buf->frame[i]) {
+			printk(KERN_ERR PFX "frame allocation failed\n");
+			goto err;
+		}
+	}
+
+	INIT_LIST_HEAD(&buf->list);
+	buf->status = 0;
+	return 0;
+
+err:
+	free_buffer(buf);
+	return -ENOMEM;
+}
+
+static int set_num_buffers(struct b3dfg_dev *fgdev, int num_buffers)
+{
+	int i;
 	struct b3dfg_buffer *newbufs;
 
 	printk(KERN_INFO PFX "set %d buffers\n", num_buffers);
@@ -128,16 +158,12 @@ static long set_num_buffers(struct b3dfg_dev *fgdev, int num_buffers)
 			return -ENOMEM;
 
 		for (i = 0; i < num_buffers; i++) {
-			struct b3dfg_buffer *buf = &fgdev->buffers[i];
-			buf->addr = kmalloc(frame_size, GFP_KERNEL);
-			if (!buf->addr)
-				printk("failed kmalloc\n");
+			init_buffer(fgdev, &fgdev->buffers[i]);
 			/* FIXME return value checking */
-			buf->status = 0;
 		}
 	} else if (num_buffers == 0) {
 		for (i = 0; i < fgdev->num_buffers; i++)
-			kfree(fgdev->buffers[i].addr);
+			free_buffer(&fgdev->buffers[i]);
 		kfree(fgdev->buffers);
 		fgdev->buffers = NULL;
 	} else if (fgdev->num_buffers < num_buffers) {
@@ -147,18 +173,14 @@ static long set_num_buffers(struct b3dfg_dev *fgdev, int num_buffers)
 		if (!newbufs)
 			return -ENOMEM;
 		for (i = fgdev->num_buffers; i < num_buffers; i++) {
-			struct b3dfg_buffer *buf = &newbufs[i];
-			buf->addr = kmalloc(frame_size, GFP_KERNEL);
-			if (!buf->addr)
-				printk("failed kmalloc\n");
+			init_buffer(fgdev, &newbufs[i]);
 			/* FIXME return value checking */
-			buf->status = 0;
 		}
 		fgdev->buffers = newbufs;
 	} else if (fgdev->num_buffers > num_buffers) {
 		/* app requests a decrease in buffers */
 		for (i = num_buffers; i < fgdev->num_buffers; i++)
-			kfree(fgdev->buffers[i].addr);
+			free_buffer(&fgdev->buffers[i]);
 		newbufs = krealloc(fgdev->buffers,
 			num_buffers * sizeof(struct b3dfg_buffer), GFP_KERNEL);
 		/* FIXME return value checking */
