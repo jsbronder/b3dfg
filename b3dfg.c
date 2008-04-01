@@ -46,9 +46,10 @@
 
 #define B3DFG_IOC_MAGIC			0xb3 /* dfg :-) */
 #define B3DFG_IOCGFRMSZ			_IOR(B3DFG_IOC_MAGIC, 1, int)
-#define B3DFG_IOCTNUMBUFS		_IOW(B3DFG_IOC_MAGIC, 2, int)
-#define B3DFG_IOCTTRANS			_IOW(B3DFG_IOC_MAGIC, 3, int)
-#define B3DFG_IOCTQUEUEBUF		_IOW(B3DFG_IOC_MAGIC, 4, int)
+#define B3DFG_IOCTNUMBUFS		_IO(B3DFG_IOC_MAGIC, 2)
+#define B3DFG_IOCTTRANS			_IO(B3DFG_IOC_MAGIC, 3)
+#define B3DFG_IOCTQUEUEBUF		_IO(B3DFG_IOC_MAGIC, 4)
+#define B3DFG_IOCQPOLLBUF		_IO(B3DFG_IOC_MAGIC, 5)
 
 enum {
 	/* number of 4kb pages per frame */
@@ -224,6 +225,23 @@ static int queue_buffer(struct b3dfg_dev *fgdev, int bufidx)
 	return 0;
 }
 
+/* non-blocking buffer poll. returns 1 if data is present in the buffer,
+ * 0 otherwise */
+static int poll_buffer(struct b3dfg_dev *fgdev, int bufidx)
+{
+	struct b3dfg_buffer *buf = buffer_from_idx(fgdev, bufidx);
+	if (unlikely(!buf))
+		return -ENOENT;
+
+	if (unlikely(!fgdev->transmission_enabled)) {
+		printk(KERN_ERR PFX
+			"cannot poll buffers when transmission is disabled\n");
+		return -EINVAL;
+	}
+
+	return !!(buf->status & B3DFG_BUFFER_STATUS_POPULATED);
+}
+
 static void set_transmission(struct b3dfg_dev *fgdev, int enabled)
 {
 	printk(KERN_INFO PFX "%s transmission\n",
@@ -279,6 +297,8 @@ static long b3dfg_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		return 0;
 	case B3DFG_IOCTQUEUEBUF:
 		return queue_buffer(fgdev, (int) arg);
+	case B3DFG_IOCQPOLLBUF:
+		return poll_buffer(fgdev, (int) arg);
 	default:
 		printk(KERN_ERR PFX "unrecognised ioctl %x\n", cmd);
 		return -EINVAL;
