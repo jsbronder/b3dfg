@@ -8,8 +8,8 @@
 
 #define B3DFG_IOC_MAGIC		0xb3 /* dfg :-) */
 #define B3DFG_IOCGFRMSZ		_IOR(B3DFG_IOC_MAGIC, 1, int)
-#define B3DFG_IOCSNUMBUFS	_IOW(B3DFG_IOC_MAGIC, 2, int)
-#define B3DFG_IOCSTRANS		_IOW(B3DFG_IOC_MAGIC, 3, int)
+#define B3DFG_IOCTNUMBUFS	_IOW(B3DFG_IOC_MAGIC, 2, int)
+#define B3DFG_IOCTTRANS		_IOW(B3DFG_IOC_MAGIC, 3, int)
 
 static int fd;
 
@@ -24,7 +24,7 @@ static void print_frame_size(void)
 
 static void set_num_buffers(int num_buffers)
 {
-	int r = ioctl(fd, B3DFG_IOCSNUMBUFS, num_buffers);
+	int r = ioctl(fd, B3DFG_IOCTNUMBUFS, num_buffers);
 	if (r < 0)
 		perror("set_num_buffers ioctl");
 	else
@@ -33,7 +33,7 @@ static void set_num_buffers(int num_buffers)
 
 static void set_transmission(int enabled)
 {
-	int r = ioctl(fd, B3DFG_IOCSTRANS, enabled);
+	int r = ioctl(fd, B3DFG_IOCTTRANS, enabled);
 	if (r < 0)
 		perror("set_transmission ioctl");
 	else

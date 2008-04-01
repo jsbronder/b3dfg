@@ -44,10 +44,11 @@
 #define B3DFG_BAR_REGS	0
 #define B3DFG_REGS_LENGTH 0x10000
 
-#define B3DFG_IOC_MAGIC		0xb3 /* dfg :-) */
-#define B3DFG_IOCGFRMSZ		_IOR(B3DFG_IOC_MAGIC, 1, int)
-#define B3DFG_IOCSNUMBUFS	_IOW(B3DFG_IOC_MAGIC, 2, int)
-#define B3DFG_IOCSTRANS		_IOW(B3DFG_IOC_MAGIC, 3, int)
+#define B3DFG_IOC_MAGIC			0xb3 /* dfg :-) */
+#define B3DFG_IOCGFRMSZ			_IOR(B3DFG_IOC_MAGIC, 1, int)
+#define B3DFG_IOCTNUMBUFS		_IOW(B3DFG_IOC_MAGIC, 2, int)
+#define B3DFG_IOCTTRANS			_IOW(B3DFG_IOC_MAGIC, 3, int)
+#define B3DFG_IOCTQUEUEBUF		_IOW(B3DFG_IOC_MAGIC, 4, int)
 
 enum {
 	/* number of 4kb pages per frame */
@@ -106,6 +107,16 @@ static void b3dfg_write32(struct b3dfg_dev *fgdev, u8 reg, u32 value)
 }
 
 /**** buffer management ****/
+
+/* retrieve a buffer pointer from a buffer index. also checks that the
+ * requested buffer actually exists. */
+static inline struct b3dfg_buffer *buffer_from_idx(struct b3dfg_dev *fgdev,
+	int idx)
+{
+	if (unlikely(idx >= fgdev->num_buffers))
+		return NULL;
+	return &fgdev->buffers[idx];
+}
 
 /* free the frames in a buffer */
 static void free_buffer(struct b3dfg_buffer *buf)
@@ -190,6 +201,29 @@ static int set_num_buffers(struct b3dfg_dev *fgdev, int num_buffers)
 	return 0;
 }
 
+/* queue a buffer to receive data */
+static int queue_buffer(struct b3dfg_dev *fgdev, int bufidx)
+{
+	struct b3dfg_buffer *buf = buffer_from_idx(fgdev, bufidx);
+	if (unlikely(!buf))
+		return -ENOENT;
+
+	if (unlikely(!fgdev->transmission_enabled)) {
+		printk(KERN_ERR PFX
+			"cannot queue buffers when transmission is disabled\n");
+		return -EINVAL;
+	}
+
+	if (unlikely(buf->status & B3DFG_BUFFER_STATUS_QUEUED)) {
+		printk(KERN_ERR PFX "buffer %d is already queued", bufidx);
+		return -EINVAL;
+	}
+
+	list_add_tail(&buf->list, &fgdev->buffer_queue);
+	buf->status = B3DFG_BUFFER_STATUS_QUEUED;
+	return 0;
+}
+
 static void set_transmission(struct b3dfg_dev *fgdev, int enabled)
 {
 	printk(KERN_INFO PFX "%s transmission\n",
@@ -238,11 +272,13 @@ static long b3dfg_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 	switch (cmd) {
 	case B3DFG_IOCGFRMSZ:
 		return __put_user(fgdev->frame_size, (int __user *) arg);
-	case B3DFG_IOCSNUMBUFS:
+	case B3DFG_IOCTNUMBUFS:
 		return set_num_buffers(fgdev, (int) arg);
-	case B3DFG_IOCSTRANS:
+	case B3DFG_IOCTTRANS:
 		set_transmission(fgdev, (int) arg);
 		return 0;
+	case B3DFG_IOCTQUEUEBUF:
+		return queue_buffer(fgdev, (int) arg);
 	default:
 		printk(KERN_ERR PFX "unrecognised ioctl %x\n", cmd);
 		return -EINVAL;
