@@ -32,14 +32,19 @@
 #include <linux/poll.h>
 #include <linux/wait.h>
 #include <linux/mm.h>
+#include <linux/version.h>
 
 #include <asm/uaccess.h>
 
 /* TODO:
  * locking
  * queue/wait buffer presents filltime results for each frame?
- * nopage to fault conversion for 2.6.23+
  */
+
+/* pre-2.6.23-compat */
+#ifndef VM_CAN_NONLINEAR
+#define VM_CAN_NONLINEAR 0
+#endif
 
 #define DRIVER_NAME "b3dfg"
 #define PFX DRIVER_NAME ": "
@@ -318,8 +323,37 @@ static void b3dfg_vma_close(struct vm_area_struct *vma)
 	fgdev->mapping_count--;
 }
 
+#if LINUX_VERSION_CODE > KERNEL_VERSION(2,6,22)
 /* page fault handler */
-struct page *b3dfg_vma_nopage(struct vm_area_struct *vma,
+static int b3dfg_vma_fault(struct vm_area_struct *vma, struct vm_fault *vmf)
+{
+	struct b3dfg_dev *fgdev = vma->vm_file->private_data;
+	unsigned long off = vmf->pgoff << PAGE_SHIFT;
+	int frame_size = fgdev->frame_size;
+	int buf_size = frame_size * B3DFG_FRAMES_PER_BUFFER;
+	struct page *page;
+
+	/* determine which buffer the offset lies within */
+	int buf_idx = off / buf_size;
+	/* and the offset into the buffer */
+	int buf_off = off % buf_size;
+
+	/* determine which frame inside the buffer the offset lies in */
+	int frm_idx = buf_off / frame_size;
+	/* and the offset into the frame */
+	int frm_off = buf_off % frame_size;
+
+	if (unlikely(buf_idx > fgdev->num_buffers))
+		return VM_FAULT_SIGBUS;
+
+	page = virt_to_page(fgdev->buffers[buf_idx].frame[frm_idx] + frm_off);
+	get_page(page);
+	vmf->page = page;
+	return 0;
+}
+#else
+/* page fault handler */
+static struct page *b3dfg_vma_nopage(struct vm_area_struct *vma,
 	unsigned long address, int *type)
 {
 	struct b3dfg_dev *fgdev = vma->vm_file->private_data;
@@ -347,11 +381,16 @@ struct page *b3dfg_vma_nopage(struct vm_area_struct *vma,
 		*type = VM_FAULT_MINOR;
 	return page;
 }
+#endif
 
 static struct vm_operations_struct b3dfg_vm_ops = {
 	.open = b3dfg_vma_open,
 	.close = b3dfg_vma_close,
+#if LINUX_VERSION_CODE > KERNEL_VERSION(2,6,22)
+	.fault = b3dfg_vma_fault,
+#else
 	.nopage = b3dfg_vma_nopage,
+#endif
 };
 
 static int set_transmission(struct b3dfg_dev *fgdev, int enabled)
@@ -457,7 +496,7 @@ static int b3dfg_mmap(struct file *filp, struct vm_area_struct *vma)
 	if (vsize > psize)
 		return -EINVAL;
 
-	vma->vm_flags |= VM_IO | VM_RESERVED;
+	vma->vm_flags |= VM_IO | VM_RESERVED | VM_CAN_NONLINEAR;
 	vma->vm_ops = &b3dfg_vm_ops;
 	b3dfg_vma_open(vma);
 	return 0;
