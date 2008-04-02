@@ -4,6 +4,7 @@
 #include <unistd.h>
 #include <stdlib.h>
 #include <sys/ioctl.h>
+#include <sys/mman.h>
 #include <stdio.h>
 
 #define B3DFG_IOC_MAGIC         0xb3 /* dfg :-) */
@@ -12,6 +13,7 @@
 #define B3DFG_IOCTTRANS         _IO(B3DFG_IOC_MAGIC, 3)
 #define B3DFG_IOCTQUEUEBUF      _IO(B3DFG_IOC_MAGIC, 4)
 #define B3DFG_IOCQPOLLBUF       _IO(B3DFG_IOC_MAGIC, 5)
+#define B3DFG_IOCQWAITBUF       _IO(B3DFG_IOC_MAGIC, 6)
 
 static int fd;
 
@@ -42,8 +44,28 @@ static void set_transmission(int enabled)
 		printf("set transmission %d result %d\n", enabled, r);
 }
 
+static void poll_buffer(int buffer)
+{
+	int r = ioctl(fd, B3DFG_IOCQPOLLBUF, buffer);
+	if (r < 0)
+		perror("poll_buffer failed");
+	else
+		printf("poll_buffer %d result %d\n", buffer, r);
+}
+
+static void wait_buffer(int buffer)
+{
+	int r = ioctl(fd, B3DFG_IOCQWAITBUF, buffer);
+	if (r < 0)
+		perror("wait_buffer failed");
+	else
+		printf("wait_buffer %d result %d\n", buffer, r);
+}
+
 int main(void)
 {
+	unsigned char *data;
+
 	fd = open("/dev/b3dfg0", O_RDONLY);
 	if (fd == -1) {
 		perror("open");
@@ -51,8 +73,18 @@ int main(void)
 	}
 
 	print_frame_size();
-	set_num_buffers(3);
-	set_transmission(1);
+	set_num_buffers(1);
 
+	data = mmap(NULL, 1024*768*3, PROT_READ, MAP_SHARED, fd, 0);
+	if (data == MAP_FAILED) {
+		perror("mmap");
+		exit(1);
+	}
+
+	set_transmission(1);
+	poll_buffer(0);
+	wait_buffer(0);
+
+	munmap(data, 1024*768*3);
 	close(fd);
 }
