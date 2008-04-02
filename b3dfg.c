@@ -324,6 +324,9 @@ static int wait_buffer(struct b3dfg_dev *fgdev, int bufidx)
 		return -EINVAL;
 	}
 
+	if (buf->status & B3DFG_BUFFER_STATUS_POPULATED)
+		return 0;
+
 	r = wait_event_interruptible(fgdev->buffer_waitqueue,
 		buf->status & B3DFG_BUFFER_STATUS_POPULATED);
 	if (unlikely(r))
