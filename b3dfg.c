@@ -29,6 +29,8 @@
 #include <linux/types.h>
 #include <linux/cdev.h>
 #include <linux/list.h>
+#include <linux/poll.h>
+#include <linux/wait.h>
 
 #include <asm/uaccess.h>
 
@@ -84,6 +86,7 @@ struct b3dfg_dev {
 	int num_buffers;
 	struct b3dfg_buffer *buffers;
 	struct list_head buffer_queue;
+	wait_queue_head_t buffer_waitqueue;
 	int transmission_enabled;
 };
 
@@ -329,11 +332,31 @@ static long b3dfg_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 	}
 }
 
+static unsigned int b3dfg_poll(struct file *filp, poll_table *poll_table)
+{
+	struct b3dfg_dev *fgdev = filp->private_data;
+	int i;
+
+	if (unlikely(!fgdev->transmission_enabled)) {
+		printk(KERN_ERR PFX "cannot poll() when transmission is disabled\n");
+		return POLLERR;
+	}
+
+	poll_wait(filp, &fgdev->buffer_waitqueue, poll_table);
+	for (i = 0; i < fgdev->num_buffers; i++) {
+		if (fgdev->buffers[i].status & B3DFG_BUFFER_STATUS_POPULATED)
+			return POLLIN | POLLRDNORM;
+	}
+
+	return 0;
+}
+
 static struct file_operations b3dfg_fops = {
 	.owner = THIS_MODULE,
 	.open = b3dfg_open,
 	.release = b3dfg_release,
 	.unlocked_ioctl = b3dfg_ioctl,
+	.poll = b3dfg_poll,
 };
 
 /* initialize device and any data structures. called before any interrupts
@@ -343,6 +366,7 @@ static void b3dfg_init_dev(struct b3dfg_dev *fgdev)
 	u32 frm_size = b3dfg_read32(fgdev, B3D_REG_FRM_SIZE);
 	fgdev->frame_size = frm_size * 4096;
 	INIT_LIST_HEAD(&fgdev->buffer_queue);
+	init_waitqueue_head(&fgdev->buffer_waitqueue);
 }
 
 static int __devinit b3dfg_probe(struct pci_dev *pdev,
