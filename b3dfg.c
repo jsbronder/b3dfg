@@ -90,7 +90,7 @@ struct b3dfg_dev {
     struct class_device *classdev;
 	void __iomem *regs;
 
-	int frame_size;
+	unsigned int frame_size;
 	
 	int num_buffers;
 	struct b3dfg_buffer *buffers;
@@ -155,7 +155,7 @@ static void free_all_buffers(struct b3dfg_dev *fgdev)
 /* initialize a buffer: allocate its frames, set default values */
 static int init_buffer(struct b3dfg_dev *fgdev, struct b3dfg_buffer *buf)
 {
-	int frame_size = fgdev->frame_size;
+	unsigned int frame_size = fgdev->frame_size;
 	int i;
 
 	memset(buf, 0, sizeof(struct b3dfg_buffer));
@@ -329,19 +329,19 @@ static int b3dfg_vma_fault(struct vm_area_struct *vma, struct vm_fault *vmf)
 {
 	struct b3dfg_dev *fgdev = vma->vm_file->private_data;
 	unsigned long off = vmf->pgoff << PAGE_SHIFT;
-	int frame_size = fgdev->frame_size;
-	int buf_size = frame_size * B3DFG_FRAMES_PER_BUFFER;
+	unsigned int frame_size = fgdev->frame_size;
+	unsigned int buf_size = frame_size * B3DFG_FRAMES_PER_BUFFER;
 	struct page *page;
 
 	/* determine which buffer the offset lies within */
-	int buf_idx = off / buf_size;
+	unsigned int buf_idx = off / buf_size;
 	/* and the offset into the buffer */
-	int buf_off = off % buf_size;
+	unsigned int buf_off = off % buf_size;
 
 	/* determine which frame inside the buffer the offset lies in */
-	int frm_idx = buf_off / frame_size;
+	unsigned int frm_idx = buf_off / frame_size;
 	/* and the offset into the frame */
-	int frm_off = buf_off % frame_size;
+	unsigned int frm_off = buf_off % frame_size;
 
 	if (unlikely(buf_idx > fgdev->num_buffers))
 		return VM_FAULT_SIGBUS;
@@ -358,19 +358,19 @@ static struct page *b3dfg_vma_nopage(struct vm_area_struct *vma,
 {
 	struct b3dfg_dev *fgdev = vma->vm_file->private_data;
 	unsigned long off = vma->vm_pgoff << PAGE_SHIFT;
-	int frame_size = fgdev->frame_size;
-	int buf_size = frame_size * B3DFG_FRAMES_PER_BUFFER;
+	unsigned int frame_size = fgdev->frame_size;
+	unsigned int buf_size = frame_size * B3DFG_FRAMES_PER_BUFFER;
 	struct page *page;
 
 	/* determine which buffer the offset lies within */
-	int buf_idx = off / buf_size;
+	unsigned int buf_idx = off / buf_size;
 	/* and the offset into the buffer */
-	int buf_off = off % buf_size;
+	unsigned int buf_off = off % buf_size;
 
 	/* determine which frame inside the buffer the offset lies in */
-	int frm_idx = buf_off / frame_size;
+	unsigned int frm_idx = buf_off / frame_size;
 	/* and the offset into the frame */
-	int frm_off = buf_off % frame_size;
+	unsigned int frm_off = buf_off % frame_size;
 
 	if (unlikely(buf_idx > fgdev->num_buffers))
 		return NOPAGE_SIGBUS;
