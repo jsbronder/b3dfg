@@ -294,10 +294,16 @@ static int wait_buffer(struct b3dfg_dev *fgdev, int bufidx)
 	return 0;
 }
 
-static void set_transmission(struct b3dfg_dev *fgdev, int enabled)
+static int set_transmission(struct b3dfg_dev *fgdev, int enabled)
 {
 	printk(KERN_INFO PFX "%s transmission\n",
 		(enabled) ? "enable" : "disable");
+	
+	if (enabled && fgdev->num_buffers == 0) {
+		printk(KERN_ERR PFX "cannot start transmission to 0 buffers\n");
+		return -EINVAL;
+	}
+
 	fgdev->transmission_enabled = enabled;
 	b3dfg_write32(fgdev, B3D_REG_HW_CTRL, enabled & 0x1);
 
@@ -305,6 +311,7 @@ static void set_transmission(struct b3dfg_dev *fgdev, int enabled)
 	/* FIXME will this throw away useful dma data too? */
 	if (!enabled)
 		b3dfg_read32(fgdev, B3D_REG_DMA_STS);
+	return 0;
 }
 
 static irqreturn_t b3dfg_intr(int irq, void *dev_id)
@@ -345,8 +352,7 @@ static long b3dfg_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 	case B3DFG_IOCTNUMBUFS:
 		return set_num_buffers(fgdev, (int) arg);
 	case B3DFG_IOCTTRANS:
-		set_transmission(fgdev, (int) arg);
-		return 0;
+		return set_transmission(fgdev, (int) arg);
 	case B3DFG_IOCTQUEUEBUF:
 		return queue_buffer(fgdev, (int) arg);
 	case B3DFG_IOCQPOLLBUF:
