@@ -39,6 +39,7 @@
 /* TODO:
  * locking
  * queue/wait buffer presents filltime results for each frame?
+ * counting of dropped frames
  */
 
 /* pre-2.6.23-compat */
@@ -81,6 +82,7 @@ enum {
 struct b3dfg_buffer {
 	unsigned char *frame[B3DFG_FRAMES_PER_BUFFER];
 	unsigned char status;
+	uint8_t nr_populated_frames;
 	struct list_head list;
 };
 
@@ -96,9 +98,12 @@ struct b3dfg_dev {
 	struct b3dfg_buffer *buffers;
 	struct list_head buffer_queue;
 	wait_queue_head_t buffer_waitqueue;
-	int transmission_enabled;
 
 	int mapping_count;
+
+	int transmission_enabled;
+	int cur_dma_frame_idx;
+	dma_addr_t cur_dma_frame_addr;
 };
 
 static struct class *b3dfg_class;
@@ -113,7 +118,7 @@ static const struct pci_device_id b3dfg_ids[] __devinitdata = {
 
 static u32 b3dfg_read32(struct b3dfg_dev *fgdev, u8 reg)
 {
-	return (uint32_t) ioread32(fgdev->regs + reg);
+	return (u32) ioread32(fgdev->regs + reg);
 }
 
 static void b3dfg_write32(struct b3dfg_dev *fgdev, u8 reg, u32 value)
@@ -265,7 +270,9 @@ static int queue_buffer(struct b3dfg_dev *fgdev, int bufidx)
 	}
 
 	list_add_tail(&buf->list, &fgdev->buffer_queue);
-	buf->status = B3DFG_BUFFER_STATUS_QUEUED;
+	buf->nr_populated_frames = 0;
+	buf->status &= ~B3DFG_BUFFER_STATUS_POPULATED;
+	buf->status |= B3DFG_BUFFER_STATUS_QUEUED;
 	return 0;
 }
 
@@ -416,10 +423,65 @@ static int set_transmission(struct b3dfg_dev *fgdev, int enabled)
 static irqreturn_t b3dfg_intr(int irq, void *dev_id)
 {
 	struct b3dfg_dev *fgdev = dev_id;
+	struct device *dev;
+	struct b3dfg_buffer *buf;
+	u32 sts;
+	int next_trf;
+
 	if (unlikely(!fgdev->transmission_enabled))
 		return IRQ_NONE;
 
-	printk(KERN_INFO PFX "got interrupt\n");
+	sts = b3dfg_read32(fgdev, B3D_REG_DMA_STS);
+	if (unlikely(sts == 0))
+		return IRQ_NONE;
+
+	/* acknowledge interrupt */
+	printk(KERN_INFO PFX "got interrupt, DMA_STS=%08x\n", sts);
+	b3dfg_write32(fgdev, B3D_REG_DMA_STS, 0x02);
+
+	dev = &fgdev->pdev->dev;
+	buf = list_entry(fgdev->buffer_queue.next, struct b3dfg_buffer, list);
+	next_trf = sts & 0x3;
+
+	if (sts & 0x4) {
+		/* last DMA completed */
+		printk("last DMA completed\n");
+		if (unlikely(fgdev->cur_dma_frame_idx == -1)) {
+			printk("ERROR completed but no last idx?\n");
+			/* FIXME flesh out error handling */
+			return IRQ_HANDLED;
+		}
+		dma_unmap_single(dev, fgdev->cur_dma_frame_addr, fgdev->frame_size,
+			DMA_FROM_DEVICE);
+		fgdev->cur_dma_frame_idx = -1;
+
+		if (++buf->nr_populated_frames == B3DFG_FRAMES_PER_BUFFER) {
+			/* last frame of that triplet completed */
+			printk("triplet completed\n");
+			buf->status |= B3DFG_BUFFER_STATUS_POPULATED;
+			buf->status &= ~B3DFG_BUFFER_STATUS_QUEUED;
+			list_del_init(&buf->list);
+			wake_up_interruptible(&fgdev->buffer_waitqueue);
+		}
+	}
+
+	if (next_trf) {
+		unsigned char *frm_addr;
+		next_trf--;
+
+		printk("program next transfer frame %d\n", next_trf);
+		if (next_trf != buf->nr_populated_frames) {
+			printk("ERROR mismatch, nr_populated_frames=%d\n",
+				buf->nr_populated_frames);
+			/* FIXME this is where we should handle dropped triplets */
+			return IRQ_HANDLED;
+		}
+		fgdev->cur_dma_frame_idx = next_trf;
+		frm_addr = buf->frame[next_trf];
+		fgdev->cur_dma_frame_addr = dma_map_single(dev, frm_addr,
+			fgdev->frame_size, DMA_FROM_DEVICE);
+		/* FIXME program EC220 */
+	}
 	return IRQ_HANDLED;
 }
 
