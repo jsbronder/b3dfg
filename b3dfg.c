@@ -40,6 +40,7 @@
  * locking
  * queue/wait buffer presents filltime results for each frame?
  * counting of dropped frames
+ * review endianness
  */
 
 /* pre-2.6.23-compat */
@@ -74,6 +75,21 @@ enum {
 	 * bit 2 indicates the previous DMA transfer has completed
 	 * bit 8:15 - counter of number of discarded triplets */
 	B3D_REG_DMA_STS = 0x8,
+
+	/* bus address for DMA transfers. lower 2 bits must be zero because DMA
+	 * works with 32 bit word size. */
+	B3D_REG_EC220_DMA_ADDR = 0x8000,
+
+	/* bit 20:0 - number of 32 bit words to be transferred
+	 * bit 21:31 - reserved */
+	B3D_REG_EC220_TRF_SIZE = 0x8004,
+
+	/* bit 0 - error bit
+	 * bit 1 - interrupt bit (set to generate interrupt at end of transfer)
+	 * bit 2 - start bit (set to start transfer)
+	 * bit 3 - direction (0 = DMA_TO_DEVICE, 1 = DMA_FROM_DEVICE
+	 * bit 4:31 - reserved */
+	B3D_REG_EC220_DMA_STS = 0x8008,
 };
 
 #define B3DFG_BUFFER_STATUS_QUEUED			(1<<0)
@@ -116,12 +132,12 @@ static const struct pci_device_id b3dfg_ids[] __devinitdata = {
 
 /**** register I/O ****/
 
-static u32 b3dfg_read32(struct b3dfg_dev *fgdev, u8 reg)
+static u32 b3dfg_read32(struct b3dfg_dev *fgdev, u16 reg)
 {
 	return (u32) ioread32(fgdev->regs + reg);
 }
 
-static void b3dfg_write32(struct b3dfg_dev *fgdev, u8 reg, u32 value)
+static void b3dfg_write32(struct b3dfg_dev *fgdev, u16 reg, u32 value)
 {
 	iowrite32(value, fgdev->regs + reg);
 }
@@ -425,6 +441,7 @@ static irqreturn_t b3dfg_intr(int irq, void *dev_id)
 	struct b3dfg_dev *fgdev = dev_id;
 	struct device *dev;
 	struct b3dfg_buffer *buf;
+	unsigned int frame_size;
 	u32 sts;
 	int next_trf;
 
@@ -440,18 +457,22 @@ static irqreturn_t b3dfg_intr(int irq, void *dev_id)
 	b3dfg_write32(fgdev, B3D_REG_DMA_STS, 0x02);
 
 	dev = &fgdev->pdev->dev;
+	frame_size = fgdev->frame_size;
 	buf = list_entry(fgdev->buffer_queue.next, struct b3dfg_buffer, list);
 	next_trf = sts & 0x3;
 
 	if (sts & 0x4) {
+		u32 tmp;
+
+		tmp = b3dfg_read32(fgdev, B3D_REG_EC220_DMA_STS);
 		/* last DMA completed */
-		printk("last DMA completed\n");
+		printk("last DMA completed, dmasts = %08x\n", tmp);
 		if (unlikely(fgdev->cur_dma_frame_idx == -1)) {
 			printk("ERROR completed but no last idx?\n");
 			/* FIXME flesh out error handling */
 			return IRQ_HANDLED;
 		}
-		dma_unmap_single(dev, fgdev->cur_dma_frame_addr, fgdev->frame_size,
+		dma_unmap_single(dev, fgdev->cur_dma_frame_addr, frame_size,
 			DMA_FROM_DEVICE);
 		fgdev->cur_dma_frame_idx = -1;
 
@@ -467,6 +488,7 @@ static irqreturn_t b3dfg_intr(int irq, void *dev_id)
 
 	if (next_trf) {
 		unsigned char *frm_addr;
+		dma_addr_t frm_addr_dma;
 		next_trf--;
 
 		printk("program next transfer frame %d\n", next_trf);
@@ -478,9 +500,14 @@ static irqreturn_t b3dfg_intr(int irq, void *dev_id)
 		}
 		fgdev->cur_dma_frame_idx = next_trf;
 		frm_addr = buf->frame[next_trf];
-		fgdev->cur_dma_frame_addr = dma_map_single(dev, frm_addr,
-			fgdev->frame_size, DMA_FROM_DEVICE);
-		/* FIXME program EC220 */
+		frm_addr_dma = dma_map_single(dev, frm_addr, frame_size,
+			DMA_FROM_DEVICE);
+		fgdev->cur_dma_frame_addr = frm_addr_dma;
+		b3dfg_write32(fgdev, B3D_REG_EC220_DMA_ADDR,
+			cpu_to_le32(frm_addr_dma));
+		b3dfg_write32(fgdev, B3D_REG_EC220_TRF_SIZE,
+			cpu_to_le32(frame_size >> 2));
+		b3dfg_write32(fgdev, B3D_REG_EC220_DMA_STS, 0x0e);
 	}
 	return IRQ_HANDLED;
 }
