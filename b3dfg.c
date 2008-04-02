@@ -31,12 +31,14 @@
 #include <linux/list.h>
 #include <linux/poll.h>
 #include <linux/wait.h>
+#include <linux/mm.h>
 
 #include <asm/uaccess.h>
 
 /* TODO:
  * locking
  * queue/wait buffer presents filltime results for each frame?
+ * nopage to fault conversion for 2.6.23+
  */
 
 #define DRIVER_NAME "b3dfg"
@@ -90,6 +92,8 @@ struct b3dfg_dev {
 	struct list_head buffer_queue;
 	wait_queue_head_t buffer_waitqueue;
 	int transmission_enabled;
+
+	int mapping_count;
 };
 
 static struct class *b3dfg_class;
@@ -177,6 +181,12 @@ static int set_num_buffers(struct b3dfg_dev *fgdev, int num_buffers)
 	if (fgdev->transmission_enabled) {
 		printk(KERN_ERR PFX
 			"cannot set buffer count while transmission is enabled\n");
+		return -EBUSY;
+	}
+
+	if (fgdev->mapping_count > 0) {
+		printk(KERN_ERR PFX
+			"cannot set buffer count while memory mappings are active\n");
 		return -EBUSY;
 	}
 
@@ -294,6 +304,56 @@ static int wait_buffer(struct b3dfg_dev *fgdev, int bufidx)
 	return 0;
 }
 
+/**** virtual memory mapping ****/
+
+static void b3dfg_vma_open(struct vm_area_struct *vma)
+{
+	struct b3dfg_dev *fgdev = vma->vm_file->private_data;
+	fgdev->mapping_count++;
+}
+
+static void b3dfg_vma_close(struct vm_area_struct *vma)
+{
+	struct b3dfg_dev *fgdev = vma->vm_file->private_data;
+	fgdev->mapping_count--;
+}
+
+/* page fault handler */
+struct page *b3dfg_vma_nopage(struct vm_area_struct *vma,
+	unsigned long address, int *type)
+{
+	struct b3dfg_dev *fgdev = vma->vm_file->private_data;
+	unsigned long off = vma->vm_pgoff << PAGE_SHIFT;
+	int frame_size = fgdev->frame_size;
+	int buf_size = frame_size * B3DFG_FRAMES_PER_BUFFER;
+	struct page *page;
+
+	/* determine which buffer the offset lies within */
+	int buf_idx = off / buf_size;
+	/* and the offset into the buffer */
+	int buf_off = off % buf_size;
+
+	/* determine which frame inside the buffer the offset lies in */
+	int frm_idx = buf_off / frame_size;
+	/* and the offset into the frame */
+	int frm_off = buf_off % frame_size;
+
+	if (unlikely(buf_idx > fgdev->num_buffers))
+		return NOPAGE_SIGBUS;
+
+	page = virt_to_page(fgdev->buffers[buf_idx].frame[frm_idx] + frm_off);
+	get_page(page);
+	if (*type)
+		*type = VM_FAULT_MINOR;
+	return page;
+}
+
+static struct vm_operations_struct b3dfg_vm_ops = {
+	.open = b3dfg_vma_open,
+	.close = b3dfg_vma_close,
+	.nopage = b3dfg_vma_nopage,
+};
+
 static int set_transmission(struct b3dfg_dev *fgdev, int enabled)
 {
 	printk(KERN_INFO PFX "%s transmission\n",
@@ -384,12 +444,32 @@ static unsigned int b3dfg_poll(struct file *filp, poll_table *poll_table)
 	return 0;
 }
 
+static int b3dfg_mmap(struct file *filp, struct vm_area_struct *vma)
+{
+	struct b3dfg_dev *fgdev = filp->private_data;
+	unsigned long offset = vma->vm_pgoff << PAGE_SHIFT;
+	unsigned long vsize = vma->vm_end - vma->vm_start;
+	unsigned long bufdatalen = fgdev->num_buffers * fgdev->frame_size * 3;
+	unsigned long psize = bufdatalen - offset;
+
+	if (fgdev->num_buffers == 0)
+		return -ENOENT;
+	if (vsize > psize)
+		return -EINVAL;
+
+	vma->vm_flags |= VM_IO | VM_RESERVED;
+	vma->vm_ops = &b3dfg_vm_ops;
+	b3dfg_vma_open(vma);
+	return 0;
+}
+
 static struct file_operations b3dfg_fops = {
 	.owner = THIS_MODULE,
 	.open = b3dfg_open,
 	.release = b3dfg_release,
 	.unlocked_ioctl = b3dfg_ioctl,
 	.poll = b3dfg_poll,
+	.mmap = b3dfg_mmap,
 };
 
 /* initialize device and any data structures. called before any interrupts
