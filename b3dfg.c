@@ -36,6 +36,7 @@
 
 /* TODO:
  * locking
+ * queue/wait buffer presents filltime results for each frame?
  */
 
 #define DRIVER_NAME "b3dfg"
@@ -52,6 +53,7 @@
 #define B3DFG_IOCTTRANS			_IO(B3DFG_IOC_MAGIC, 3)
 #define B3DFG_IOCTQUEUEBUF		_IO(B3DFG_IOC_MAGIC, 4)
 #define B3DFG_IOCQPOLLBUF		_IO(B3DFG_IOC_MAGIC, 5)
+#define B3DFG_IOCQWAITBUF		_IO(B3DFG_IOC_MAGIC, 6)
 
 enum {
 	/* number of 4kb pages per frame */
@@ -269,6 +271,29 @@ static int poll_buffer(struct b3dfg_dev *fgdev, int bufidx)
 	return !!(buf->status & B3DFG_BUFFER_STATUS_POPULATED);
 }
 
+/* sleep until a specific buffer becomes populated */
+static int wait_buffer(struct b3dfg_dev *fgdev, int bufidx)
+{
+	struct b3dfg_buffer *buf = buffer_from_idx(fgdev, bufidx);
+	int r;
+
+	if (unlikely(!buf))
+		return -ENOENT;
+
+	if (unlikely(!fgdev->transmission_enabled)) {
+		printk(KERN_ERR PFX
+			"cannot wait on buffers when transmission is disabled\n");
+		return -EINVAL;
+	}
+
+	r = wait_event_interruptible(fgdev->buffer_waitqueue,
+		buf->status & B3DFG_BUFFER_STATUS_POPULATED);
+	if (unlikely(r))
+		return -ERESTARTSYS;
+
+	return 0;
+}
+
 static void set_transmission(struct b3dfg_dev *fgdev, int enabled)
 {
 	printk(KERN_INFO PFX "%s transmission\n",
@@ -326,6 +351,8 @@ static long b3dfg_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		return queue_buffer(fgdev, (int) arg);
 	case B3DFG_IOCQPOLLBUF:
 		return poll_buffer(fgdev, (int) arg);
+	case B3DFG_IOCQWAITBUF:
+		return wait_buffer(fgdev, (int) arg);
 	default:
 		printk(KERN_ERR PFX "unrecognised ioctl %x\n", cmd);
 		return -EINVAL;
