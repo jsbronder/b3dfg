@@ -445,13 +445,15 @@ static irqreturn_t b3dfg_intr(int irq, void *dev_id)
 
 	if (unlikely(!fgdev->transmission_enabled)) {
 		printk("ignore interrupt, TX disabled\n");
-		return IRQ_NONE;
+		/* FIXME should return IRQ_NONE when we are stable */
+		goto out;
 	}
 
 	sts = b3dfg_read32(fgdev, B3D_REG_DMA_STS);
 	if (unlikely(sts == 0)) {
 		printk("ignore interrupt, zero status\n");
-		return IRQ_NONE;
+		/* FIXME should return IRQ_NONE when we are stable */
+		goto out;
 	}
 
 	/* acknowledge interrupt */
