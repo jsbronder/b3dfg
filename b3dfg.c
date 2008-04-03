@@ -447,6 +447,7 @@ static irqreturn_t b3dfg_intr(int irq, void *dev_id)
 	unsigned int frame_size;
 	u32 sts;
 	int next_trf;
+	int need_ack = 0;
 
 	if (unlikely(!fgdev->transmission_enabled)) {
 		printk("ignore interrupt, TX disabled\n");
@@ -461,18 +462,18 @@ static irqreturn_t b3dfg_intr(int irq, void *dev_id)
 
 	/* acknowledge interrupt */
 	printk(KERN_INFO PFX "got interrupt, DMA_STS=%08x\n", sts);
-	/* FIXME: avoid writing reg twice */
-	b3dfg_write32(fgdev, B3D_REG_EC220_DMA_STS, 0x02);
 
 	dev = &fgdev->pdev->dev;
 	frame_size = fgdev->frame_size;
 
 	/* FIXME: what happens with list_entry on an empty list? */
-	if (likely(!list_empty(&fgdev->buffer_queue)))
-		buf = list_entry(fgdev->buffer_queue.next, struct b3dfg_buffer, list);
-	else
-		printk("FIXME null buffer\n");
-	/* FIXME we might not have a buffer */
+	if (unlikely(list_empty(&fgdev->buffer_queue))) {
+		/* FIXME need more sanity checking here */
+		printk("no buffer, bailing\n");
+		goto out;
+	}
+	
+	buf = list_entry(fgdev->buffer_queue.next, struct b3dfg_buffer, list);
 	next_trf = sts & 0x3;
 
 	if (sts & 0x4) {
@@ -484,7 +485,7 @@ static irqreturn_t b3dfg_intr(int irq, void *dev_id)
 		if (unlikely(fgdev->cur_dma_frame_idx == -1)) {
 			printk("ERROR completed but no last idx?\n");
 			/* FIXME flesh out error handling */
-			return IRQ_HANDLED;
+			goto out;
 		}
 		dma_unmap_single(dev, fgdev->cur_dma_frame_addr, frame_size,
 			DMA_FROM_DEVICE);
@@ -514,7 +515,7 @@ static irqreturn_t b3dfg_intr(int irq, void *dev_id)
 			printk("ERROR mismatch, nr_populated_frames=%d\n",
 				buf->nr_populated_frames);
 			/* FIXME this is where we should handle dropped triplets */
-			return IRQ_HANDLED;
+			goto out;
 		}
 		if (likely(buf)) {
 			fgdev->cur_dma_frame_idx = next_trf;
@@ -526,11 +527,16 @@ static irqreturn_t b3dfg_intr(int irq, void *dev_id)
 				cpu_to_le32(frm_addr_dma));
 			b3dfg_write32(fgdev, B3D_REG_EC220_TRF_SIZE,
 				cpu_to_le32(frame_size >> 2));
-			b3dfg_write32(fgdev, B3D_REG_EC220_DMA_STS, 0x0e);
+			b3dfg_write32(fgdev, B3D_REG_EC220_DMA_STS, 0xf);
+			need_ack = 0;
 		} else {
 			printk("cannot setup next DMA due to no buffer\n");
 		}
 	}
+
+out:
+	if (need_ack)
+		b3dfg_write32(fgdev, B3D_REG_EC220_DMA_STS, 0x0e);
 	return IRQ_HANDLED;
 }
 
