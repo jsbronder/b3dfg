@@ -441,7 +441,7 @@ static irqreturn_t b3dfg_intr(int irq, void *dev_id)
 	unsigned int frame_size;
 	u32 sts;
 	int next_trf;
-	int need_ack = 0;
+	int need_ack = 1;
 
 	if (unlikely(!fgdev->transmission_enabled)) {
 		printk("ignore interrupt, TX disabled\n");
