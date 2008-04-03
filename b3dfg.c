@@ -274,12 +274,6 @@ static int queue_buffer(struct b3dfg_dev *fgdev, int bufidx)
 	if (unlikely(!buf))
 		return -ENOENT;
 
-	if (unlikely(!fgdev->transmission_enabled)) {
-		printk(KERN_ERR PFX
-			"cannot queue buffers when transmission is disabled\n");
-		return -EINVAL;
-	}
-
 	if (unlikely(buf->status & B3DFG_BUFFER_STATUS_QUEUED)) {
 		printk(KERN_ERR PFX "buffer %d is already queued", bufidx);
 		return -EINVAL;
