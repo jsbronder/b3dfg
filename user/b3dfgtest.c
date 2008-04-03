@@ -15,6 +15,8 @@
 #define B3DFG_IOCQPOLLBUF       _IO(B3DFG_IOC_MAGIC, 5)
 #define B3DFG_IOCQWAITBUF       _IO(B3DFG_IOC_MAGIC, 6)
 
+#define IMG_SIZE (1024*768)
+
 static int fd;
 
 static void print_frame_size(void)
@@ -62,6 +64,18 @@ static void wait_buffer(int buffer)
 		printf("wait_buffer %d result %d\n", buffer, r);
 }
 
+static void write_img(const char *filename, unsigned char *data)
+{
+	FILE *fd = fopen(filename, "w");
+	if (!fd) {
+		perror("fopen");
+		return;
+	}
+
+	fwrite(data, 1, IMG_SIZE, fd);
+	fclose(fd);
+}
+
 int main(void)
 {
 	unsigned char *data;
@@ -75,7 +89,7 @@ int main(void)
 	print_frame_size();
 	set_num_buffers(1);
 
-	data = mmap(NULL, 1024*768*3, PROT_READ, MAP_SHARED, fd, 0);
+	data = mmap(NULL, IMG_SIZE * 3, PROT_READ, MAP_SHARED, fd, 0);
 	if (data == MAP_FAILED) {
 		perror("mmap");
 		exit(1);
@@ -84,7 +98,10 @@ int main(void)
 	set_transmission(1);
 	poll_buffer(0);
 	wait_buffer(0);
+	write_img("red.raw", data);
+	write_img("blue.raw", data + IMG_SIZE);
+	write_img("green.raw", data + IMG_SIZE + IMG_SIZE);
 
-	munmap(data, 1024*768*3);
+	munmap(data, IMG_SIZE * 3);
 	close(fd);
 }
