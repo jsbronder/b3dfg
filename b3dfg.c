@@ -443,25 +443,36 @@ static irqreturn_t b3dfg_intr(int irq, void *dev_id)
 {
 	struct b3dfg_dev *fgdev = dev_id;
 	struct device *dev;
-	struct b3dfg_buffer *buf;
+	struct b3dfg_buffer *buf = NULL;
 	unsigned int frame_size;
 	u32 sts;
 	int next_trf;
 
-	if (unlikely(!fgdev->transmission_enabled))
+	if (unlikely(!fgdev->transmission_enabled)) {
+		printk("ignore interrupt, TX disabled\n");
 		return IRQ_NONE;
+	}
 
 	sts = b3dfg_read32(fgdev, B3D_REG_DMA_STS);
-	if (unlikely(sts == 0))
+	if (unlikely(sts == 0)) {
+		printk("ignore interrupt, zero status\n");
 		return IRQ_NONE;
+	}
 
 	/* acknowledge interrupt */
 	printk(KERN_INFO PFX "got interrupt, DMA_STS=%08x\n", sts);
-	b3dfg_write32(fgdev, B3D_REG_DMA_STS, 0x02);
+	/* FIXME: avoid writing reg twice */
+	b3dfg_write32(fgdev, B3D_REG_EC220_DMA_STS, 0x02);
 
 	dev = &fgdev->pdev->dev;
 	frame_size = fgdev->frame_size;
-	buf = list_entry(fgdev->buffer_queue.next, struct b3dfg_buffer, list);
+
+	/* FIXME: what happens with list_entry on an empty list? */
+	if (likely(!list_empty(&fgdev->buffer_queue)))
+		buf = list_entry(fgdev->buffer_queue.next, struct b3dfg_buffer, list);
+	else
+		printk("FIXME null buffer\n");
+	/* FIXME we might not have a buffer */
 	next_trf = sts & 0x3;
 
 	if (sts & 0x4) {
@@ -479,13 +490,17 @@ static irqreturn_t b3dfg_intr(int irq, void *dev_id)
 			DMA_FROM_DEVICE);
 		fgdev->cur_dma_frame_idx = -1;
 
-		if (++buf->nr_populated_frames == B3DFG_FRAMES_PER_BUFFER) {
-			/* last frame of that triplet completed */
-			printk("triplet completed\n");
-			buf->status |= B3DFG_BUFFER_STATUS_POPULATED;
-			buf->status &= ~B3DFG_BUFFER_STATUS_QUEUED;
-			list_del_init(&buf->list);
-			wake_up_interruptible(&fgdev->buffer_waitqueue);
+		if (likely(buf)) {
+			if (++buf->nr_populated_frames == B3DFG_FRAMES_PER_BUFFER) {
+				/* last frame of that triplet completed */
+				printk("triplet completed\n");
+				buf->status |= B3DFG_BUFFER_STATUS_POPULATED;
+				buf->status &= ~B3DFG_BUFFER_STATUS_QUEUED;
+				list_del_init(&buf->list);
+				wake_up_interruptible(&fgdev->buffer_waitqueue);
+			}
+		} else {
+			printk("got frame but no  buffer!\n");
 		}
 	}
 
@@ -501,16 +516,20 @@ static irqreturn_t b3dfg_intr(int irq, void *dev_id)
 			/* FIXME this is where we should handle dropped triplets */
 			return IRQ_HANDLED;
 		}
-		fgdev->cur_dma_frame_idx = next_trf;
-		frm_addr = buf->frame[next_trf];
-		frm_addr_dma = dma_map_single(dev, frm_addr, frame_size,
-			DMA_FROM_DEVICE);
-		fgdev->cur_dma_frame_addr = frm_addr_dma;
-		b3dfg_write32(fgdev, B3D_REG_EC220_DMA_ADDR,
-			cpu_to_le32(frm_addr_dma));
-		b3dfg_write32(fgdev, B3D_REG_EC220_TRF_SIZE,
-			cpu_to_le32(frame_size >> 2));
-		b3dfg_write32(fgdev, B3D_REG_EC220_DMA_STS, 0x0e);
+		if (likely(buf)) {
+			fgdev->cur_dma_frame_idx = next_trf;
+			frm_addr = buf->frame[next_trf];
+			frm_addr_dma = dma_map_single(dev, frm_addr, frame_size,
+				DMA_FROM_DEVICE);
+			fgdev->cur_dma_frame_addr = frm_addr_dma;
+			b3dfg_write32(fgdev, B3D_REG_EC220_DMA_ADDR,
+				cpu_to_le32(frm_addr_dma));
+			b3dfg_write32(fgdev, B3D_REG_EC220_TRF_SIZE,
+				cpu_to_le32(frame_size >> 2));
+			b3dfg_write32(fgdev, B3D_REG_EC220_DMA_STS, 0x0e);
+		} else {
+			printk("cannot setup next DMA due to no buffer\n");
+		}
 	}
 	return IRQ_HANDLED;
 }
