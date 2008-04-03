@@ -64,6 +64,15 @@ static void wait_buffer(int buffer)
 		printf("wait_buffer %d result %d\n", buffer, r);
 }
 
+static void queue_buffer(int buffer)
+{
+	int r = ioctl(fd, B3DFG_IOCTQUEUEBUF, buffer);
+	if (r < 0)
+		perror("queue_buffer");
+	else
+		printf("queue_buffer %d result %d\n", buffer, r);
+}
+
 static void write_img(const char *filename, unsigned char *data)
 {
 	FILE *fd = fopen(filename, "w");
@@ -95,6 +104,7 @@ int main(void)
 		exit(1);
 	}
 
+	queue_buffer(0);
 	set_transmission(1);
 	poll_buffer(0);
 	wait_buffer(0);
