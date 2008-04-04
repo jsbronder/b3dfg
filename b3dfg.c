@@ -134,11 +134,14 @@ static const struct pci_device_id b3dfg_ids[] __devinitdata = {
 
 static u32 b3dfg_read32(struct b3dfg_dev *fgdev, u16 reg)
 {
-	return (u32) ioread32(fgdev->regs + reg);
+	u32 val = ioread32(fgdev->regs + reg);
+	printk("reg %02x reads value %08x\n", reg, val);
+	return val;
 }
 
 static void b3dfg_write32(struct b3dfg_dev *fgdev, u16 reg, u32 value)
 {
+	printk("write %08x into register %02x\n", value, reg);
 	iowrite32(value, fgdev->regs + reg);
 }
 
@@ -451,13 +454,13 @@ static irqreturn_t b3dfg_intr(int irq, void *dev_id)
 
 	sts = b3dfg_read32(fgdev, B3D_REG_DMA_STS);
 	if (unlikely(sts == 0)) {
-		printk("ignore interrupt, zero status\n");
+		printk("ignore interrupt, brontes DMA status is 0\n");
 		/* FIXME should return IRQ_NONE when we are stable */
 		goto out;
 	}
 
 	/* acknowledge interrupt */
-	printk(KERN_INFO PFX "got interrupt, DMA_STS=%08x\n", sts);
+	printk(KERN_INFO PFX "got interrupt, brontes DMA_STS=%08x\n", sts);
 
 	dev = &fgdev->pdev->dev;
 	frame_size = fgdev->frame_size;
@@ -465,7 +468,7 @@ static irqreturn_t b3dfg_intr(int irq, void *dev_id)
 	/* FIXME: what happens with list_entry on an empty list? */
 	if (unlikely(list_empty(&fgdev->buffer_queue))) {
 		/* FIXME need more sanity checking here */
-		printk("no buffer, bailing\n");
+		printk("driver has no buffer ready --> cannot program any more transfers\n");
 		goto out;
 	}
 	
@@ -477,7 +480,7 @@ static irqreturn_t b3dfg_intr(int irq, void *dev_id)
 
 		tmp = b3dfg_read32(fgdev, B3D_REG_EC220_DMA_STS);
 		/* last DMA completed */
-		printk("last DMA completed, dmasts = %08x\n", tmp);
+		printk("DMA_COMP detected, ec220 dmasts = %08x\n", tmp);
 		if (unlikely(fgdev->cur_dma_frame_idx == -1)) {
 			printk("ERROR completed but no last idx?\n");
 			/* FIXME flesh out error handling */
@@ -497,7 +500,7 @@ static irqreturn_t b3dfg_intr(int irq, void *dev_id)
 				wake_up_interruptible(&fgdev->buffer_waitqueue);
 			}
 		} else {
-			printk("got frame but no  buffer!\n");
+			printk("got frame but no buffer!\n");
 		}
 	}
 
@@ -506,7 +509,7 @@ static irqreturn_t b3dfg_intr(int irq, void *dev_id)
 		dma_addr_t frm_addr_dma;
 		next_trf--;
 
-		printk("program next transfer frame %d\n", next_trf);
+		printk("program DMA transfer for frame %d\n", next_trf + 1);
 		if (next_trf != buf->nr_populated_frames) {
 			printk("ERROR mismatch, nr_populated_frames=%d\n",
 				buf->nr_populated_frames);
@@ -524,6 +527,7 @@ static irqreturn_t b3dfg_intr(int irq, void *dev_id)
 			b3dfg_write32(fgdev, B3D_REG_EC220_TRF_SIZE,
 				cpu_to_le32(frame_size >> 2));
 			b3dfg_write32(fgdev, B3D_REG_EC220_DMA_STS, 0xf);
+			b3dfg_read32(fgdev, B3D_REG_EC220_DMA_STS);
 			need_ack = 0;
 		} else {
 			printk("cannot setup next DMA due to no buffer\n");
@@ -531,8 +535,11 @@ static irqreturn_t b3dfg_intr(int irq, void *dev_id)
 	}
 
 out:
-	if (need_ack)
+	if (need_ack) {
+		printk("acknowleding interrupt\n");
 		b3dfg_write32(fgdev, B3D_REG_EC220_DMA_STS, 0x0e);
+		b3dfg_read32(fgdev, B3D_REG_EC220_DMA_STS);
+	}
 	return IRQ_HANDLED;
 }
 
