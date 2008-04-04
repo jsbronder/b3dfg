@@ -476,6 +476,7 @@ static irqreturn_t b3dfg_intr(int irq, void *dev_id)
 	next_trf = sts & 0x3;
 
 	if (sts & 0x4) {
+		int tmpidx;
 		u32 tmp;
 
 		tmp = b3dfg_read32(fgdev, B3D_REG_EC220_DMA_STS);
@@ -488,9 +489,13 @@ static irqreturn_t b3dfg_intr(int irq, void *dev_id)
 		}
 		dma_unmap_single(dev, fgdev->cur_dma_frame_addr, frame_size,
 			DMA_FROM_DEVICE);
+		tmpidx = fgdev->cur_dma_frame_idx;
 		fgdev->cur_dma_frame_idx = -1;
 
 		if (likely(buf)) {
+			unsigned char *tmp = buf->frame[tmpidx];
+			printk("handle frame completion start=%02x%02x%02x%02x\n",
+				tmp[0], tmp[1], tmp[2], tmp[3]);
 			if (++buf->nr_populated_frames == B3DFG_FRAMES_PER_BUFFER) {
 				/* last frame of that triplet completed */
 				printk("triplet completed\n");
@@ -519,6 +524,12 @@ static irqreturn_t b3dfg_intr(int irq, void *dev_id)
 		if (likely(buf)) {
 			fgdev->cur_dma_frame_idx = next_trf;
 			frm_addr = buf->frame[next_trf];
+
+			frm_addr[0] = 0xb3;
+			frm_addr[1] = 0xb4;
+			frm_addr[2] = 0xb5;
+			frm_addr[3] = 0xb6;
+
 			frm_addr_dma = dma_map_single(dev, frm_addr, frame_size,
 				DMA_FROM_DEVICE);
 			fgdev->cur_dma_frame_addr = frm_addr_dma;
