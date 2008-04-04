@@ -536,8 +536,8 @@ static irqreturn_t b3dfg_intr(int irq, void *dev_id)
 
 out:
 	if (need_ack) {
-		printk("acknowleding interrupt\n");
-		b3dfg_write32(fgdev, B3D_REG_EC220_DMA_STS, 0x0e);
+		printk("acknowledging interrupt\n");
+		b3dfg_write32(fgdev, B3D_REG_EC220_DMA_STS, 0x0b);
 		b3dfg_read32(fgdev, B3D_REG_EC220_DMA_STS);
 	}
 	return IRQ_HANDLED;
