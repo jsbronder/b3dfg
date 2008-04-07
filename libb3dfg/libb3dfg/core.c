@@ -45,6 +45,7 @@ API_EXPORTED struct b3dfg_dev *b3dfg_open(unsigned int idx)
 	char filename[12];
 	int fd;
 	int r;
+	int frame_size;
 
 	if (idx > 9) {
 		b3dfg_err("invalid index %d", idx);
@@ -61,6 +62,13 @@ API_EXPORTED struct b3dfg_dev *b3dfg_open(unsigned int idx)
 		return NULL;
 	}
 
+	r = ioctl(fd, B3DFG_IOCGFRMSZ, &frame_size);
+	if (r < 0) {
+		b3dfg_err("IOCGFRMSIZE failed %d errno=%d", r, errno);
+		close(fd);
+		return NULL;
+	}
+
 	dev = malloc(sizeof(*dev));
 	if (!dev) {
 		close(fd);
@@ -68,6 +76,7 @@ API_EXPORTED struct b3dfg_dev *b3dfg_open(unsigned int idx)
 	}
 
 	dev->fd = fd;
+	dev->frame_size = frame_size;
 	dev->mapping = NULL;
 	return dev;
 }
@@ -79,6 +88,11 @@ API_EXPORTED void b3dfg_close(struct b3dfg_dev *dev)
 	/* FIXME unmap */
 	if (close(dev->fd) < 0)
 		b3dfg_err("close failed errno=%d", errno);
+}
+
+API_EXPORTED unsigned int b3dfg_get_frame_size(struct b3dfg_dev *dev)
+{
+	return dev->frame_size;
 }
 
 API_EXPORTED int b3dfg_init(void)

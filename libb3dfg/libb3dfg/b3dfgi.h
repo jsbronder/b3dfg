@@ -21,6 +21,7 @@
 
 struct b3dfg_dev {
 	int fd;
+	unsigned int frame_size;
 	unsigned char *mapping;
 };
 
