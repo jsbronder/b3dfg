@@ -56,6 +56,7 @@ API_EXPORTED struct b3dfg_dev *b3dfg_open(unsigned int idx)
 	if (r != sizeof(filename) - 1)
 		return NULL;
 
+	b3dfg_dbg("%s", filename);
 	fd = open(filename, O_RDONLY);
 	if (fd < 0) {
 		b3dfg_err("open(%s) failed errno=%d", filename, errno);
@@ -75,8 +76,10 @@ API_EXPORTED struct b3dfg_dev *b3dfg_open(unsigned int idx)
 		return NULL;
 	}
 
+	b3dfg_dbg("opened fd=%d frame_size=%d", fd, frame_size);
 	dev->fd = fd;
 	dev->frame_size = frame_size;
+	dev->num_buffers = 0;
 	dev->mapping = NULL;
 	return dev;
 }
@@ -86,6 +89,7 @@ API_EXPORTED void b3dfg_close(struct b3dfg_dev *dev)
 	if (!dev)
 		return;
 	/* FIXME unmap */
+	b3dfg_dbg("fd=%d", dev->fd);
 	if (close(dev->fd) < 0)
 		b3dfg_err("close failed errno=%d", errno);
 }
@@ -93,6 +97,18 @@ API_EXPORTED void b3dfg_close(struct b3dfg_dev *dev)
 API_EXPORTED unsigned int b3dfg_get_frame_size(struct b3dfg_dev *dev)
 {
 	return dev->frame_size;
+}
+
+API_EXPORTED int b3dfg_set_num_buffers(struct b3dfg_dev *dev, int buffers)
+{
+	int r;
+	b3dfg_dbg("%d buffers", buffers);
+	r = ioctl(dev->fd, B3DFG_IOCTNUMBUFS, buffers);
+	if (r < 0)
+		b3dfg_err("IOCTNUMBUFS failed r=%d errno=%d", r, errno);
+	else
+		dev->num_buffers = buffers;
+	return r;
 }
 
 API_EXPORTED int b3dfg_init(void)
