@@ -73,14 +73,23 @@ static void queue_buffer(int buffer)
 		printf("queue_buffer %d result %d\n", buffer, r);
 }
 
-static void write_img(const char *filename, unsigned char *data)
+static void write_img(const char *pfx, unsigned char *data)
 {
+	unsigned char filename[50];
+	sprintf(filename, "%s.raw", pfx);
+
 	FILE *fd = fopen(filename, "w");
 	if (!fd) {
 		perror("fopen");
 		return;
 	}
 
+	fwrite(data, 1, IMG_SIZE, fd);
+	fclose(fd);
+
+	sprintf(filename, "%s.pgm", pfx);
+	fd = fopen(filename, "w");
+	fprintf(fd, "P5 1024 768 255 ");
 	fwrite(data, 1, IMG_SIZE, fd);
 	fclose(fd);
 }
@@ -96,22 +105,28 @@ int main(void)
 	}
 
 	print_frame_size();
-	set_num_buffers(1);
+	set_num_buffers(2);
 
-	data = mmap(NULL, IMG_SIZE * 3, PROT_READ, MAP_SHARED, fd, 0);
+	data = mmap(NULL, 2 * IMG_SIZE * 3, PROT_READ, MAP_SHARED, fd, 0);
 	if (data == MAP_FAILED) {
 		perror("mmap");
 		exit(1);
 	}
 
 	queue_buffer(0);
+	queue_buffer(1);
 	set_transmission(1);
 	poll_buffer(0);
 	wait_buffer(0);
-	write_img("red.raw", data);
-	write_img("blue.raw", data + IMG_SIZE);
-	write_img("green.raw", data + IMG_SIZE + IMG_SIZE);
+	write_img("01_red", data);
+	write_img("02_green", data + IMG_SIZE);
+	write_img("03_blue", data + IMG_SIZE + IMG_SIZE);
 
-	munmap(data, IMG_SIZE * 3);
+	wait_buffer(1);
+	write_img("04_red", data + (IMG_SIZE * 3));
+	write_img("05_green", data + (IMG_SIZE * 4));
+	write_img("06_blue", data + (IMG_SIZE * 5));
+
+	munmap(data, 2 * IMG_SIZE * 3);
 	close(fd);
 }
