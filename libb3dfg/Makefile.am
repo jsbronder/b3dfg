@@ -1,7 +1,7 @@
 AUTOMAKE_OPTIONS = foreign
 
 EXTRA_DIST = libb3dfg.pc.in
-DISTCLEANFILES = ChangeLog libb3dfg.pc.in
+DISTCLEANFILES = ChangeLog libb3dfg.pc
 
 SUBDIRS = libb3dfg
 

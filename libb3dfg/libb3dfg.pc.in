@@ -1,0 +1,11 @@
+prefix=@prefix@
+exec_prefix=@exec_prefix@
+libdir=@libdir@
+includedir=@includedir@
+
+Name: libb3dfg
+Description: Brontes frame grabber access library
+Version: @VERSION@
+Libs: -L${libdir} -lb3dfg
+Cflags: -I${includedir}/libb3dfg
+
