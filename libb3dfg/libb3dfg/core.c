@@ -114,6 +114,41 @@ API_EXPORTED int b3dfg_set_num_buffers(struct b3dfg_dev *dev, int buffers)
 	return r;
 }
 
+API_EXPORTED int b3dfg_queue_buffer(struct b3dfg_dev *dev, int buffer)
+{
+	int r;
+	
+	b3dfg_dbg("buffer %d", buffer);
+	r = ioctl(dev->fd, B3DFG_IOCTQUEUEBUF, buffer);
+	if (r < 0)
+		b3dfg_err("IOCTQUEUEBUF(%d) failed r=%d errno=%d", buffer, r, errno);
+	return r;
+}
+
+API_EXPORTED int b3dfg_poll_buffer(struct b3dfg_dev *dev, int buffer)
+{
+	int r;
+
+	b3dfg_dbg("buffer %d", buffer);
+	r = ioctl(dev->fd, B3DFG_IOCQPOLLBUF, buffer);
+	if (r < 0)
+		b3dfg_err("IOCQPOLLBUF(%d) failed r=%d errno=%d", buffer, r, errno);
+	return r;
+}
+
+API_EXPORTED int b3dfg_wait_buffer(struct b3dfg_dev *dev, int buffer)
+{
+	int r;
+
+	b3dfg_dbg("buffer %d", buffer);
+	r = ioctl(dev->fd, B3DFG_IOCQWAITBUF, buffer);
+	if (r < 0)
+		b3dfg_err("IOCQWAITBUF(%d) failed r=%d errno=%d", buffer, r, errno);
+	return r;
+}
+
+
+
 API_EXPORTED unsigned char *b3dfg_map_buffers(struct b3dfg_dev *dev,
 	int prefault)
 {
@@ -128,6 +163,7 @@ API_EXPORTED unsigned char *b3dfg_map_buffers(struct b3dfg_dev *dev,
 	if (prefault)
 		flags |= MAP_POPULATE;
 	
+	b3dfg_dbg("");
 	mapping = mmap(NULL,
 		dev->frame_size * FRAMES_PER_BUFFER * dev->num_buffers, PROT_READ,
 		flags, dev->fd, 0);
@@ -150,6 +186,8 @@ API_EXPORTED void b3dfg_unmap_buffers(struct b3dfg_dev *dev)
 	int r;
 	if (!dev->mapping)
 		return;
+
+	b3dfg_dbg("");
 	r = munmap(dev->mapping,
 		dev->frame_size * FRAMES_PER_BUFFER * dev->num_buffers);
 	if (r != 0)
