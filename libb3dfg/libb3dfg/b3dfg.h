@@ -19,6 +19,7 @@ void b3dfg_exit(void);
 b3dfg_dev *b3dfg_open(unsigned int idx);
 void b3dfg_close(b3dfg_dev *dev);
 
+int b3dfg_get_fd(b3dfg_dev *dev);
 unsigned int b3dfg_get_frame_size(b3dfg_dev *dev);
 int b3dfg_set_transmission(b3dfg_dev *dev, int enabled);
 

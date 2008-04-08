@@ -97,6 +97,11 @@ API_EXPORTED void b3dfg_close(struct b3dfg_dev *dev)
 		b3dfg_err("close failed errno=%d", errno);
 }
 
+API_EXPORTED int b3dfg_get_fd(struct b3dfg_dev *dev)
+{
+	return dev->fd;
+}
+
 API_EXPORTED unsigned int b3dfg_get_frame_size(struct b3dfg_dev *dev)
 {
 	return dev->frame_size;
