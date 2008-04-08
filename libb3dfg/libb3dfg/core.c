@@ -107,6 +107,16 @@ API_EXPORTED unsigned int b3dfg_get_frame_size(struct b3dfg_dev *dev)
 	return dev->frame_size;
 }
 
+API_EXPORTED int b3dfg_set_transmission(struct b3dfg_dev *dev, int enabled)
+{
+	int r;
+	b3dfg_dbg("%s", enabled ? "enabled" : "disabled");
+	r = ioctl(dev->fd, B3DFG_IOCTTRANS, enabled);
+	if (r < 0)
+		b3dfg_err("IOCTTRANS(%d) failed r=%d errno=%d", enabled, r, errno);
+	return r;
+}
+
 API_EXPORTED int b3dfg_set_num_buffers(struct b3dfg_dev *dev, int buffers)
 {
 	int r;
