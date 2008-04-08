@@ -13,10 +13,12 @@
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
 
+#include "b3dfg.h"
 #include "b3dfgi.h"
 
 void b3dfg_log(enum b3dfg_log_level level, const char *function,
@@ -88,8 +90,9 @@ API_EXPORTED void b3dfg_close(struct b3dfg_dev *dev)
 {
 	if (!dev)
 		return;
-	/* FIXME unmap */
 	b3dfg_dbg("fd=%d", dev->fd);
+
+	b3dfg_unmap_buffers(dev);
 	if (close(dev->fd) < 0)
 		b3dfg_err("close failed errno=%d", errno);
 }
@@ -109,6 +112,49 @@ API_EXPORTED int b3dfg_set_num_buffers(struct b3dfg_dev *dev, int buffers)
 	else
 		dev->num_buffers = buffers;
 	return r;
+}
+
+API_EXPORTED unsigned char *b3dfg_map_buffers(struct b3dfg_dev *dev,
+	int prefault)
+{
+	unsigned char *mapping;
+	int flags = MAP_SHARED;
+
+	if (dev->mapping) {
+		b3dfg_err("buffers already mapped");
+		return NULL;
+	}
+
+	if (prefault)
+		flags |= MAP_POPULATE;
+	
+	mapping = mmap(NULL,
+		dev->frame_size * FRAMES_PER_BUFFER * dev->num_buffers, PROT_READ,
+		flags, dev->fd, 0);
+	if (mapping == MAP_FAILED) {
+		b3dfg_err("mmap failed errno=%d", errno);
+		return NULL;
+	}
+
+	dev->mapping = mapping;
+	return mapping;
+}
+
+API_EXPORTED unsigned char *b3dfg_get_mapping(struct b3dfg_dev *dev)
+{
+	return dev->mapping;
+}
+
+API_EXPORTED void b3dfg_unmap_buffers(struct b3dfg_dev *dev)
+{
+	int r;
+	if (!dev->mapping)
+		return;
+	r = munmap(dev->mapping,
+		dev->frame_size * FRAMES_PER_BUFFER * dev->num_buffers);
+	if (r != 0)
+		b3dfg_err("munmap failed r=%d errno=%d", r, errno);
+	dev->mapping = NULL;
 }
 
 API_EXPORTED int b3dfg_init(void)

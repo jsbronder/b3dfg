@@ -19,6 +19,8 @@
 #define B3DFG_IOCQPOLLBUF       _IO(B3DFG_IOC_MAGIC, 5)
 #define B3DFG_IOCQWAITBUF       _IO(B3DFG_IOC_MAGIC, 6)
 
+#define FRAMES_PER_BUFFER 3
+
 struct b3dfg_dev {
 	int fd;
 	unsigned int frame_size;

@@ -19,7 +19,7 @@ void b3dfg_exit(void);
 b3dfg_dev *b3dfg_open(unsigned int idx);
 void b3dfg_close(b3dfg_dev *dev);
 
-int b3dfg_get_frame_size(b3dfg_dev *dev);
+unsigned int b3dfg_get_frame_size(b3dfg_dev *dev);
 int b3dfg_set_transmission(b3dfg_dev *dev, int enabled);
 
 int b3dfg_set_num_buffers(b3dfg_dev *dev, int buffers);
@@ -27,7 +27,7 @@ int b3dfg_queue_buffer(b3dfg_dev *dev, int buffer);
 int b3dfg_poll_buffer(b3dfg_dev *dev, int buffer);
 int b3dfg_wait_buffer(b3dfg_dev *dev, int buffer);
 
-unsigned char *b3dfg_map_buffers(b3dfg_dev *dev);
+unsigned char *b3dfg_map_buffers(b3dfg_dev *dev, int prefault);
 unsigned char *b3dfg_get_mapping(b3dfg_dev *dev);
 void b3dfg_unmap_buffers(b3dfg_dev *dev);
 
