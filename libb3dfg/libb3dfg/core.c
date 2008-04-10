@@ -39,6 +39,7 @@ void b3dfg_log(enum b3dfg_log_level level, const char *function,
 	va_start(args, format);
 	vfprintf(stderr, format, args);
 	va_end(args);
+	fprintf(stderr, "\n");
 }
 
 API_EXPORTED struct b3dfg_dev *b3dfg_open(unsigned int idx)
