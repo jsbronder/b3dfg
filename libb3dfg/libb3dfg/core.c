@@ -21,6 +21,129 @@
 #include "b3dfg.h"
 #include "b3dfgi.h"
 
+/**
+ * \mainpage libb3dfg API reference
+ * libb3dfg is a dynamic shared library providing a C API to the low-level
+ * kernel interface to the Brontes Frame Grabber driver (b3dfg).
+ *
+ * The interface is deliberately modelled to be similar to the
+ * libdc1394/video1394 interface used on previous versions of the product.
+ *
+ * A general introduction to this library is shown below. Be sure to check
+ * the full API documentation for further details and some other
+ * functionality.
+ *
+ * \section libinit Library initialization
+ *
+ * Before using this library, call b3dfg_init(). After using the library it is
+ * good practice to call b3dfg_exit() to clean up resources, but this is not
+ * mandatory; those resources will be cleaned up at application exit anyway.
+ *
+ * \section devhandling Device handling
+ *
+ * After initializing the library, the first thing you will want to do is
+ * obtain a device handle (a b3dfg_dev pointer) by calling b3dfg_open().
+ * All subsequent operations are performed based on this handle.
+ *
+ * \section buftheory Buffer theory
+ *
+ * The optics capture 3 images for any one frame, which are referred to
+ * as the red, green and blue channels (even though they do not actually
+ * represent colours: they are 3 distinct frames). A group of 3 frames is
+ * referred to as a buffer.
+ *
+ * Before enabling image transmission, you must call b3dfg_set_num_buffers()
+ * to allocate some buffers. The buffers are allocated by the kernel driver,
+ * so you simply specify how many you would like.
+ *
+ * After allocating buffers, you can gain access to the frame data within by
+ * <em>mapping</em> the buffers into your process using b3dfg_map_buffers().
+ * This function returns a pointer to an area of memory with the following
+ * structure:
+ *
+ * <table>
+ * <tr>
+ * <td>Buffer 0, red frame</td>
+ * <td>Buffer 0, green frame</td>
+ * <td>Buffer 0, blue frame</td>
+ * </tr>
+ * <tr>
+ * <td>Buffer 1, red frame</td>
+ * <td>Buffer 1, green frame</td>
+ * <td>Buffer 1, blue frame</td>
+ * </tr>
+ * <tr>
+ * <td>Buffer 2, red frame</td>
+ * <td>Buffer 2, green frame</td>
+ * <td>Buffer 2, blue frame</td>
+ * </tr>
+ * </table>
+ *
+ * Read the above representation left-to-right and then top-to-bottom. The
+ * image data is presented contiguously in memory in this fashion.
+ *
+ * \section bufaccess Buffer addressing
+ *
+ * Once you have created the mapping and have a pointer to the start of it,
+ * you can compute the address of any frame with simple pointer arithmetic.
+ * Assigning frame numbers:
+ * <ul><li>0 = red</li><li>1 = green</li><li>2 = blue</li></ul>
+ *
+ * The equation is:
+ *
+ * <code>
+ *     frame_start_addr = mapping + (frame_size * ((buffer_idx * 3) + frame_num))
+ * </code>
+ *
+ * It may be more intuitive to think of it as follows:
+ *
+ * <code>
+ *     frame_start_addr = mapping + (buffer_idx * frame_size * 3) + (frame_num * frame_size)
+ * </code>
+ *
+ * For example, buffer 2 green frame:
+ *
+ * <code>
+ * frame_start_addr = mapping + (frame_size * ((2 * 3) + 1)) = mapping + (frame_size * 7)
+ * </code>
+ *
+ * The frame_size can be determined by calling b3dfg_get_frame_size(). You
+ * may wish to hardcode it to 1024x768 for optimization purposes, but do
+ * remember that the frame size may change in future: there are plans to
+ * include the first level pyramid data after the full-res frame.
+ *
+ * \section transfer Data transfer
+ *
+ * When you are ready to receive data into a buffer, you must <em>queue</em>
+ * it with b3dfg_queue_buffer(). A queued buffer will be filled with 3 frames
+ * of image data at some point in the future, whereas an unqueued buffer will
+ * not be touched by the underlying driver or hardware.
+ *
+ * It is legal to queue multiple buffers, and it is in fact necessary for
+ * performance: unless there are free buffers available, frames will be
+ * dropped. Buffers will be filled in the order that they were queued.
+ *
+ * \section bufmgmt Buffer ownership
+ *
+ * Each buffer has two modes of ownership; a buffer is either owned by the
+ * software or it is owned by the hardware.
+ *
+ * Reading from any buffer is only permitted at times when that buffer is
+ * owned by the software.
+ *
+ * Writing to any buffer from software will result in undefined behaviour,
+ * regardless of ownership.
+ *
+ * After allocation, all buffers are automatically owned by the software, and
+ * they will not be used for data transfer by default. If you want to use a
+ * buffer to receive some data, you must <em>queue</em> that buffer using
+ * b3dfg_queue_buffer(). Queuing a buffer also transfers ownership of that
+ * buffer to the hardware - you cannot access that buffer until further notice.
+ *
+ * 
+ *
+ */
+
 void b3dfg_log(enum b3dfg_log_level level, const char *function,
 	const char *format, ...)
 {

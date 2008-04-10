@@ -50,6 +50,6 @@ AC_DEFINE([API_EXPORTED], [__attribute__((visibility("default")))], [Default vis
 AM_CFLAGS="-std=gnu99 $inline_cflags -Wall -Wundef -Wunused -Wstrict-prototypes -Werror-implicit-function-declaration -Wno-pointer-sign -Wshadow"
 AC_SUBST(AM_CFLAGS)
 
-AC_CONFIG_FILES([libb3dfg.pc] [Makefile] [libb3dfg/Makefile] [examples/Makefile])
+AC_CONFIG_FILES([libb3dfg.pc] [Makefile] [libb3dfg/Makefile] [examples/Makefile] [doc/Makefile])
 AC_OUTPUT
 
