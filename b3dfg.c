@@ -134,14 +134,11 @@ static const struct pci_device_id b3dfg_ids[] __devinitdata = {
 
 static u32 b3dfg_read32(struct b3dfg_dev *fgdev, u16 reg)
 {
-	u32 val = ioread32(fgdev->regs + reg);
-	printk("reg %02x reads value %08x\n", reg, val);
-	return val;
+	return ioread32(fgdev->regs + reg);
 }
 
 static void b3dfg_write32(struct b3dfg_dev *fgdev, u16 reg, u32 value)
 {
-	printk("write %08x into register %02x\n", value, reg);
 	iowrite32(value, fgdev->regs + reg);
 }
 
@@ -549,7 +546,6 @@ out:
 	if (need_ack) {
 		printk("acknowledging interrupt\n");
 		b3dfg_write32(fgdev, B3D_REG_EC220_DMA_STS, 0x0b);
-		b3dfg_read32(fgdev, B3D_REG_EC220_DMA_STS);
 	}
 	return IRQ_HANDLED;
 }
