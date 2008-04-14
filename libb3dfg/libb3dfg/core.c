@@ -123,26 +123,59 @@
  * performance: unless there are free buffers available, frames will be
  * dropped. Buffers will be filled in the order that they were queued.
  *
- * Buffers are dequeued when they are filled.
+ * Buffers are dequeued when they are filled (populated). Your application
+ * must then poll the buffer before accessing the data.
  *
- * \section waitbuf Waiting on buffers
+ * \section bufstate Buffer states
  *
- * After queueing a buffer, your application is probably going to want to
- * know when that buffer gets filled with data, so that you can start
- * processing.
+ * A buffer is in 1 of 3 states at any moment in time:
+ *  - <b>Polled</b> - the buffer is not queued, and if it was previously
+ *    queued, it has been dequeued and polled for its data.
+ *  - <b>Pending</b> - the buffer has been queued with b3dfg_queue_buffer()
+ *    and will be filled with image data at some point in the future.
+ *  - <b>Populated</b> - the buffer was previously queued and has been
+ *    populated with image data. It is no longer queued.
  *
- * The b3dfg_poll_buffer() function is a non-blocking function which tells
- * you if a particular buffer has been populated with image data (and hence
- * dequeued).
+ * At the point when transmission is enabled, all buffers are reset to the
+ * polled state.
  *
- * The b3dfg_wait_buffer() function is a blocking function which puts your
- * thread to sleep until that specific buffer has become populated.
+ * \section pollbuf Buffer polling
+ *
+ * Some time after a buffer is queued, it will move into the populated state.
+ * When this state change occurs, your application will want to move the
+ * buffer into the polled state and then access the data inside.
+ *
+ * In order to move a populated buffer into the polled state, call the
+ * b3dfg_poll_buffer() function. It is legal to call this on a pending buffer
+ * too - the return code indicates if any state change actually occured. In
+ * other words, you can use this function to check if a previously-queued
+ * buffer has been filled with data or if it is still pending.
+ *
+ * You should always ensure that a buffer moves into the polled state (by
+ * checking the b3dfg_poll_buffer() return code) before accessing the data
+ * contained within.
+ *
+ * The b3dfg_wait_buffer() can be used to sleep on a pending buffer - it will
+ * put your application to sleep, wait until the buffer moves to the populated
+ * state, poll it, and then wake up your application again. It is legal to call
+ * this function on a buffer that is already populated (it will poll it and
+ * return immediately). Also note that you do not need to call
+ * b3dfg_poll_buffer() on a buffer that you have just waited on.
  *
  * The underlying kernel driver also implements the <code>poll</code>
  * operation meaning that system calls such as poll() and select() are
  * supported. The b3dfg_get_fd() function returns a file descriptor which
- * can be monitored for read events (<code>POLLIN</code>).
- * 
+ * can be monitored for read events (<code>POLLIN</code>). If one of these 
+ * system calls indicates activity on the file descriptor it means that at
+ * least one buffer is in the populated state.
+ *
+ * To use the poll() implementation, your application will want to track which
+ * buffer is going to be filled up next. Then call poll() or select() or
+ * similar, wait for activity, and then poll the buffer that you were expecting
+ * to be filled. Process the data, do whatever else, then loop. Even though
+ * you may know exactly which buffer was filled up when select() returned, it
+ * is important that you poll the buffer to move it into the polled state so
+ * that the slate is clean for the next iteration of the loop.
  *
  * \section bufmgmt Buffer ownership
  *
