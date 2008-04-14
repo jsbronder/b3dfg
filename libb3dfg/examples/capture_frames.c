@@ -22,7 +22,7 @@ static void write_frame(int buffer, int frame)
 {
 	char filename[50];
 	FILE *fd;
-	int num = (buffer * 2) + frame;
+	int num = (buffer * 3) + frame;
 
 	sprintf(filename, "cap%02d.ppm", num);
 	fd = fopen(filename, "w");
