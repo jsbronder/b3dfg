@@ -457,7 +457,7 @@ static irqreturn_t b3dfg_intr(int irq, void *dev_id)
 	}
 
 	/* acknowledge interrupt */
-	printk(KERN_INFO PFX "got interrupt, brontes DMA_STS=%08x\n", sts);
+	printk(KERN_INFO PFX "got interrupt, brontes DMA_STS=%08x (dropped=%d comp=%d next_trf=%d)\n", sts, (sts >> 8) & 0xff, !!(sts & 0x4), sts & 0x3);
 
 	dev = &fgdev->pdev->dev;
 	frame_size = fgdev->frame_size;
@@ -469,7 +469,6 @@ static irqreturn_t b3dfg_intr(int irq, void *dev_id)
 		goto out;
 	}
 	
-	buf = list_entry(fgdev->buffer_queue.next, struct b3dfg_buffer, list);
 	next_trf = sts & 0x3;
 
 	if (sts & 0x4) {
@@ -489,6 +488,7 @@ static irqreturn_t b3dfg_intr(int irq, void *dev_id)
 		tmpidx = fgdev->cur_dma_frame_idx;
 		fgdev->cur_dma_frame_idx = -1;
 
+		buf = list_entry(fgdev->buffer_queue.next, struct b3dfg_buffer, list);
 		if (likely(buf)) {
 			unsigned char *tmp = buf->frame[tmpidx];
 			printk("handle frame completion start=%02x%02x%02x%02x\n",
@@ -512,13 +512,14 @@ static irqreturn_t b3dfg_intr(int irq, void *dev_id)
 		next_trf--;
 
 		printk("program DMA transfer for frame %d\n", next_trf + 1);
-		if (next_trf != buf->nr_populated_frames) {
-			printk("ERROR mismatch, nr_populated_frames=%d\n",
-				buf->nr_populated_frames);
-			/* FIXME this is where we should handle dropped triplets */
-			goto out;
-		}
+		buf = list_entry(fgdev->buffer_queue.next, struct b3dfg_buffer, list);
 		if (likely(buf)) {
+			if (next_trf != buf->nr_populated_frames) {
+				printk("ERROR mismatch, nr_populated_frames=%d\n",
+					buf->nr_populated_frames);
+				/* FIXME this is where we should handle dropped triplets */
+				goto out;
+			}
 			fgdev->cur_dma_frame_idx = next_trf;
 			frm_addr = buf->frame[next_trf];
 
