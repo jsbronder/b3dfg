@@ -36,8 +36,8 @@
  * \section libinit Library initialization
  *
  * Before using this library, call b3dfg_init(). After using the library it is
- * good practice to call b3dfg_exit() to clean up resources, but this is not
- * mandatory; those resources will be cleaned up at application exit anyway.
+ * good practice to call b3dfg_exit() to clean up resources, but this is
+ * optional; those resources will be cleaned up at application exit anyway.
  *
  * \section devhandling Device handling
  *
@@ -122,6 +122,27 @@
  * It is legal to queue multiple buffers, and it is in fact necessary for
  * performance: unless there are free buffers available, frames will be
  * dropped. Buffers will be filled in the order that they were queued.
+ *
+ * Buffers are dequeued when they are filled.
+ *
+ * \section waitbuf Waiting on buffers
+ *
+ * After queueing a buffer, your application is probably going to want to
+ * know when that buffer gets filled with data, so that you can start
+ * processing.
+ *
+ * The b3dfg_poll_buffer() function is a non-blocking function which tells
+ * you if a particular buffer has been populated with image data (and hence
+ * dequeued).
+ *
+ * The b3dfg_wait_buffer() function is a blocking function which puts your
+ * thread to sleep until that specific buffer has become populated.
+ *
+ * The underlying kernel driver also implements the <code>poll</code>
+ * operation meaning that system calls such as poll() and select() are
+ * supported. The b3dfg_get_fd() function returns a file descriptor which
+ * can be monitored for read events (<code>POLLIN</code>).
+ * 
  *
  * \section bufmgmt Buffer ownership
  *
