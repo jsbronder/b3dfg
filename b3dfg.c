@@ -467,7 +467,7 @@ static irqreturn_t b3dfg_intr(int irq, void *dev_id)
 	}
 
 	/* acknowledge interrupt */
-	printk(KERN_INFO PFX "got interrupt, brontes DMA_STS=%08x (dropped=%d comp=%d next_trf=%d)\n", sts, (sts >> 8) & 0xff, !!(sts & 0x4), sts & 0x3);
+	printk(KERN_INFO PFX "got intr, brontes DMASTS=%08x (dropped=%d comp=%d next_trf=%d)\n", sts, (sts >> 8) & 0xff, !!(sts & 0x4), sts & 0x3);
 
 	dev = &fgdev->pdev->dev;
 	frame_size = fgdev->frame_size;
