@@ -418,9 +418,19 @@ static int set_transmission(struct b3dfg_dev *fgdev, int enabled)
 	printk(KERN_INFO PFX "%s transmission\n",
 		(enabled) ? "enable" : "disable");
 	
-	if (enabled && fgdev->num_buffers == 0) {
-		printk(KERN_ERR PFX "cannot start transmission to 0 buffers\n");
-		return -EINVAL;
+	if (enabled) {
+		/* check we're a bus master */
+		u16 command;
+		pci_read_config_word(fgdev->pdev, PCI_COMMAND, &command);
+		printk("PCI_COMMAND reads %04x\n", command);
+		if (!(command & PCI_COMMAND_MASTER)) {
+			printk(KERN_ERR PFX "cannot transmit; am not a bus master\n");
+			return -EIO;
+		}
+		if (fgdev->num_buffers == 0) {
+			printk(KERN_ERR PFX "cannot start transmission to 0 buffers\n");
+			return -EINVAL;
+		}
 	}
 
 	fgdev->transmission_enabled = enabled;
