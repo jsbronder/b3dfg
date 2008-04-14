@@ -24,7 +24,7 @@ static void write_frame(int buffer, int frame)
 	FILE *fd;
 	int num = (buffer * 3) + frame;
 
-	sprintf(filename, "cap%02d.ppm", num);
+	sprintf(filename, "cap%02d.pgm", num);
 	fd = fopen(filename, "w");
 	fprintf(fd, "P5 1024 768 255 ");
 	fwrite(mapping + (buffer * frame_size * 3) + (frame_size * frame), 1,
