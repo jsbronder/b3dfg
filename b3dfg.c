@@ -422,7 +422,6 @@ static int set_transmission(struct b3dfg_dev *fgdev, int enabled)
 		/* check we're a bus master */
 		u16 command;
 		pci_read_config_word(fgdev->pdev, PCI_COMMAND, &command);
-		printk("PCI_COMMAND reads %04x\n", command);
 		if (!(command & PCI_COMMAND_MASTER)) {
 			printk(KERN_ERR PFX "cannot transmit; am not a bus master\n");
 			return -EIO;
@@ -438,8 +437,10 @@ static int set_transmission(struct b3dfg_dev *fgdev, int enabled)
 
 	/* reset dropped triplet counter */
 	/* FIXME will this throw away useful dma data too? */
-	if (!enabled)
-		b3dfg_read32(fgdev, B3D_REG_DMA_STS);
+	if (!enabled) {
+		u32 tmp = b3dfg_read32(fgdev, B3D_REG_DMA_STS);
+		printk("brontes DMA_STS reads %x after TX stopped\n", tmp);
+	}
 	return 0;
 }
 
