@@ -86,8 +86,9 @@ int main(void)
 		write_to_file(i);
 	}
 
+	r = 0;
 out:
 	b3dfg_unmap_buffers(dev);
 	b3dfg_close(dev);
-	return 0;
+	return r;
 }
