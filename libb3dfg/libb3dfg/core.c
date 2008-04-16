@@ -159,8 +159,8 @@
  * put your application to sleep, wait until the buffer moves to the populated
  * state, poll it, and then wake up your application again. It is legal to call
  * this function on a buffer that is already populated (it will poll it and
- * return immediately). Also note that you do not need to call
- * b3dfg_poll_buffer() on a buffer that you have just waited on.
+ * return immediately). Also note that since wait includes poll, you do not
+ * need to call b3dfg_poll_buffer() on a buffer that you have just waited on.
  *
  * The underlying kernel driver also implements the <code>poll</code>
  * operation meaning that system calls such as poll() and select() are
@@ -188,15 +188,15 @@
  * Writing to any buffer from software will result in undefined behaviour,
  * regardless of ownership.
  *
- * After allocation, all buffers are automatically owned by the software, and
- * they will not be used for data transfer by default. If you want to use a
- * buffer to receive some data, you must <em>queue</em> that buffer using
- * b3dfg_queue_buffer(). Queuing a buffer also transfers ownership of that
- * buffer to the hardware - you cannot access that buffer until further notice.
- *
- * 
+ * Buffers are owned by the software when they are in the polled state. They
+ * are owned by the hardware at all other times. In other words, queueing a
+ * buffer transfers control to the hardware until you poll it and observe
+ * that data has been captured.
  *
  */
+
+/** @defgroup core Core operations */
+/** @defgroup io Buffers and I/O */
 
 void b3dfg_log(enum b3dfg_log_level level, const char *function,
 	const char *format, ...)
@@ -219,6 +219,12 @@ void b3dfg_log(enum b3dfg_log_level level, const char *function,
 	fprintf(stderr, "\n");
 }
 
+/** \ingroup core
+ * Obtain a device handle for a frame grabber.
+ *
+ * \param idx numerical index of the frame grabber you wish to open, usually 0
+ * \returns a device handle, or NULL on error
+ */
 API_EXPORTED struct b3dfg_dev *b3dfg_open(unsigned int idx)
 {
 	struct b3dfg_dev *dev;
@@ -264,6 +270,15 @@ API_EXPORTED struct b3dfg_dev *b3dfg_open(unsigned int idx)
 	return dev;
 }
 
+/** \ingroup core
+ * Close a device handle. Call this when you have finished using a device.
+ * If they were mapped, buffers are unmapped during this operation.
+ *
+ * If a NULL device handle is provided, this function simply returns without
+ * doing anything.
+ *
+ * \param dev the device to close
+ */
 API_EXPORTED void b3dfg_close(struct b3dfg_dev *dev)
 {
 	if (!dev)
@@ -275,16 +290,42 @@ API_EXPORTED void b3dfg_close(struct b3dfg_dev *dev)
 		b3dfg_err("close failed errno=%d", errno);
 }
 
+/** \ingroup io
+ * Obtain a file descriptor corresponding to a device handle. You can pass this
+ * file descriptor to the poll() or select() system calls (or a variant) -
+ * if those system calls indicate availability of data to be read then it
+ * indicates that one or more buffers are in the populated state.
+ *
+ * \param dev a device handle
+ * \returns a file descriptor corresponding to the device handle
+ */
 API_EXPORTED int b3dfg_get_fd(struct b3dfg_dev *dev)
 {
 	return dev->fd;
 }
 
+/** \ingroup io
+ * Obtain the size of the frames presented by the frame grabber. Multiply
+ * this by 3 to calculate the size of a buffer.
+ *
+ * \param dev a device handle
+ * \returns the frame size in bytes
+ */
 API_EXPORTED unsigned int b3dfg_get_frame_size(struct b3dfg_dev *dev)
 {
 	return dev->frame_size;
 }
 
+/** \ingroup io
+ * Enable or disable transmission. It is legal to attempt to enable
+ * transmission if it was already enabled, or disable transmission if it was
+ * already disabled; this function does not indicate error in either case.
+ * FIXME: kernel driver does not agree yet!
+ *
+ * \param dev a device handle
+ * \param enabled 1 to enable transmission, 0 to disable
+ * \returns 0 on success, non-zero on error
+ */
 API_EXPORTED int b3dfg_set_transmission(struct b3dfg_dev *dev, int enabled)
 {
 	int r;
@@ -295,6 +336,20 @@ API_EXPORTED int b3dfg_set_transmission(struct b3dfg_dev *dev, int enabled)
 	return r;
 }
 
+/** \ingroup io
+ * Set the number of buffers to potentially be used for later I/O. Calling
+ * this function causes the kernel to allocate the buffers internally.
+ *
+ * It is legal to call this function multiple times with different values,
+ * the kernel will grow or shrink its buffer pool accordingly.
+ *
+ * This function cannot be called when a mapping is active or transmission
+ * is enabled.
+ *
+ * \param dev a device handle
+ * \param buffers the number of buffers to keep in the pool
+ * \returns 0 on success, non-zero on error
+ */
 API_EXPORTED int b3dfg_set_num_buffers(struct b3dfg_dev *dev, int buffers)
 {
 	int r;
@@ -307,6 +362,14 @@ API_EXPORTED int b3dfg_set_num_buffers(struct b3dfg_dev *dev, int buffers)
 	return r;
 }
 
+/** \ingroup io
+ * Queue a buffer. This moves a buffer from the polled state into the pending
+ * state.
+ *
+ * \param dev a device handle
+ * \param buffer the buffer to queue
+ * \returns 0 on success, non-zero on error
+ */
 API_EXPORTED int b3dfg_queue_buffer(struct b3dfg_dev *dev, int buffer)
 {
 	int r;
@@ -318,6 +381,21 @@ API_EXPORTED int b3dfg_queue_buffer(struct b3dfg_dev *dev, int buffer)
 	return r;
 }
 
+/** \ingroup io
+ * Poll a buffer. This function can be used to determine whether a buffer is
+ * pending or if it has been populated.
+ *
+ * If the buffer has been populated, this function returns 1 and the buffer
+ * is automatically moved into the polled state. If the buffer has not been
+ * populated (it is in the polled or pending states) this function returns 0
+ * without taking further actions.
+ * 
+ * \param dev a device handle
+ * \param buffer the buffer to poll
+ * \returns 1 if the buffer was populated (and is now polled)
+ * \returns 0 otherwise
+ * \returns negative on error
+ */
 API_EXPORTED int b3dfg_poll_buffer(struct b3dfg_dev *dev, int buffer)
 {
 	int r;
@@ -329,6 +407,26 @@ API_EXPORTED int b3dfg_poll_buffer(struct b3dfg_dev *dev, int buffer)
 	return r;
 }
 
+/** \ingroup io
+ * Wait on a pending buffer. This function can be used to sleep until a
+ * specific buffer is populated.
+ *
+ * You can view this function as equivalent to calling b3dfg_poll_buffer() in
+ * a loop until it returns non-zero, except it is actually much more efficient
+ * than that. This function causes the kernel to put your application to
+ * sleep, then some clever scheduler magic ensures the process is only woken
+ * up again when frame data is ready.
+ * 
+ * If the buffer was already populated, this function immediately returns
+ * success without sleeping.
+ *
+ * Upon success (i.e. frame data is present in buffer), this function call
+ * automatically moves the buffer from the populated state to the polled state.
+ *
+ * \returns 0 on success (buffer now contains data and has been moved to
+ * polled state)
+ * \returns non-zero on error
+ */
 API_EXPORTED int b3dfg_wait_buffer(struct b3dfg_dev *dev, int buffer)
 {
 	int r;
@@ -339,8 +437,6 @@ API_EXPORTED int b3dfg_wait_buffer(struct b3dfg_dev *dev, int buffer)
 		b3dfg_err("IOCQWAITBUF(%d) failed r=%d errno=%d", buffer, r, errno);
 	return r;
 }
-
-
 
 API_EXPORTED unsigned char *b3dfg_map_buffers(struct b3dfg_dev *dev,
 	int prefault)
