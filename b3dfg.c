@@ -583,7 +583,6 @@ static int b3dfg_release(struct inode *inode, struct file *filp)
 static long b3dfg_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 {
 	struct b3dfg_dev *fgdev = filp->private_data;
-	printk(KERN_INFO PFX "ioctl %x %ld\n", cmd, arg);
 	switch (cmd) {
 	case B3DFG_IOCGFRMSZ:
 		return __put_user(fgdev->frame_size, (int __user *) arg);
