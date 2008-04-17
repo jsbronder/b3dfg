@@ -95,10 +95,16 @@ enum {
 #define B3DFG_BUFFER_STATUS_QUEUED			(1<<0)
 #define B3DFG_BUFFER_STATUS_POPULATED		(1<<1)
 
+enum b3dfg_buffer_state {
+	B3DFG_BUFFER_POLLED,
+	B3DFG_BUFFER_PENDING,
+	B3DFG_BUFFER_POPULATED,
+};
+
 struct b3dfg_buffer {
 	unsigned char *frame[B3DFG_FRAMES_PER_BUFFER];
-	unsigned char status;
-	uint8_t nr_populated_frames;
+	u8 state;
+	u8 nr_populated_frames;
 	struct list_head list;
 };
 
@@ -276,15 +282,14 @@ static int queue_buffer(struct b3dfg_dev *fgdev, int bufidx)
 	if (unlikely(!buf))
 		return -ENOENT;
 
-	if (unlikely(buf->status & B3DFG_BUFFER_STATUS_QUEUED)) {
+	if (unlikely(buf->state == B3DFG_BUFFER_PENDING)) {
 		printk(KERN_ERR PFX "buffer %d is already queued", bufidx);
 		return -EINVAL;
 	}
 
 	list_add_tail(&buf->list, &fgdev->buffer_queue);
 	buf->nr_populated_frames = 0;
-	buf->status &= ~B3DFG_BUFFER_STATUS_POPULATED;
-	buf->status |= B3DFG_BUFFER_STATUS_QUEUED;
+	buf->state = B3DFG_BUFFER_PENDING;
 	return 0;
 }
 
@@ -302,7 +307,13 @@ static int poll_buffer(struct b3dfg_dev *fgdev, int bufidx)
 		return -EINVAL;
 	}
 
-	return !!(buf->status & B3DFG_BUFFER_STATUS_POPULATED);
+	if (buf->state != B3DFG_BUFFER_POPULATED)
+		return 0;
+
+	if (likely(buf->state == B3DFG_BUFFER_POPULATED))
+		buf->state = B3DFG_BUFFER_POLLED;
+
+	return 1;
 }
 
 /* sleep until a specific buffer becomes populated */
@@ -320,14 +331,15 @@ static int wait_buffer(struct b3dfg_dev *fgdev, int bufidx)
 		return -EINVAL;
 	}
 
-	if (buf->status & B3DFG_BUFFER_STATUS_POPULATED)
+	if (buf->state == B3DFG_BUFFER_STATUS_POPULATED)
 		return 0;
 
 	r = wait_event_interruptible(fgdev->buffer_waitqueue,
-		buf->status & B3DFG_BUFFER_STATUS_POPULATED);
+		buf->state == B3DFG_BUFFER_POPULATED);
 	if (unlikely(r))
 		return -ERESTARTSYS;
 
+	buf->state = B3DFG_BUFFER_POLLED;
 	return 0;
 }
 
@@ -509,8 +521,7 @@ static irqreturn_t b3dfg_intr(int irq, void *dev_id)
 			if (++buf->nr_populated_frames == B3DFG_FRAMES_PER_BUFFER) {
 				/* last frame of that triplet completed */
 				printk("triplet completed\n");
-				buf->status |= B3DFG_BUFFER_STATUS_POPULATED;
-				buf->status &= ~B3DFG_BUFFER_STATUS_QUEUED;
+				buf->state = B3DFG_BUFFER_POPULATED;
 				list_del_init(&buf->list);
 				wake_up_interruptible(&fgdev->buffer_waitqueue);
 			}
@@ -524,8 +535,8 @@ static irqreturn_t b3dfg_intr(int irq, void *dev_id)
 		dma_addr_t frm_addr_dma;
 		next_trf--;
 
-		printk("program DMA transfer for frame %d\n", next_trf + 1);
 		buf = list_entry(fgdev->buffer_queue.next, struct b3dfg_buffer, list);
+		printk("program DMA transfer for frame %d\n", next_trf + 1);
 		if (likely(buf)) {
 			if (next_trf != buf->nr_populated_frames) {
 				printk("ERROR mismatch, nr_populated_frames=%d\n",
@@ -616,7 +627,7 @@ static unsigned int b3dfg_poll(struct file *filp, poll_table *poll_table)
 
 	poll_wait(filp, &fgdev->buffer_waitqueue, poll_table);
 	for (i = 0; i < fgdev->num_buffers; i++) {
-		if (fgdev->buffers[i].status & B3DFG_BUFFER_STATUS_POPULATED)
+		if (fgdev->buffers[i].state == B3DFG_BUFFER_POPULATED)
 			return POLLIN | POLLRDNORM;
 	}
 
