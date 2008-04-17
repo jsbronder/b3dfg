@@ -122,6 +122,8 @@ struct b3dfg_dev {
 	dma_addr_t cur_dma_frame_addr;
 };
 
+static u8 b3dfg_devices[B3DFG_MAX_DEVS];
+
 static struct class *b3dfg_class;
 static dev_t b3dfg_devt;
 
@@ -659,19 +661,34 @@ static void b3dfg_init_dev(struct b3dfg_dev *fgdev)
 	init_waitqueue_head(&fgdev->buffer_waitqueue);
 }
 
+/* find next free minor number, returns -1 if none are availabile */
+static int get_free_minor(void)
+{
+	int i;
+	for (i = 0; i < B3DFG_MAX_DEVS; i++) {
+		if (b3dfg_devices[i] == 0)
+			return i;
+	}
+	return -1;
+}
+
 static int __devinit b3dfg_probe(struct pci_dev *pdev,
 	const struct pci_device_id *id)
 {
 	struct b3dfg_dev *fgdev = kzalloc(sizeof(*fgdev), GFP_KERNEL);
 	int r = 0;
-
-	/* FIXME: always using minor 0, hope we don't probe twice! */
-	int minor = 0;
+	int minor = get_free_minor();
 	dev_t devno = MKDEV(MAJOR(b3dfg_devt), minor);
 
 	if (fgdev == NULL)
 		return -ENOMEM;
 
+	if (minor < 0) {
+		printk(KERN_ERR PFX "too many devices found!\n");
+		return -EIO;
+	}
+
+	b3dfg_devices[minor] = 1;
 	printk(KERN_INFO PFX "probe device at %s with IRQ %d\n",
 		pci_name(pdev), pdev->irq);
 
@@ -732,12 +749,15 @@ err2:
 	cdev_del(&fgdev->chardev);
 err1:
 	kfree(fgdev);
+	if (minor >= 0)
+		b3dfg_devices[minor] = 0;
 	return r;
 }
 
 static void __devexit b3dfg_remove(struct pci_dev *pdev)
 {
 	struct b3dfg_dev *fgdev = pci_get_drvdata(pdev);
+	unsigned int minor = MINOR(fgdev->chardev.dev);
 
 	printk(KERN_INFO PFX "remove\n");
 
@@ -747,6 +767,7 @@ static void __devexit b3dfg_remove(struct pci_dev *pdev)
 	class_device_unregister(fgdev->classdev);
 	cdev_del(&fgdev->chardev);
 	kfree(fgdev);
+	b3dfg_devices[minor] = 0;
 }
 
 static struct pci_driver b3dfg_driver = {
