@@ -96,7 +96,7 @@ enum {
 #define B3DFG_BUFFER_STATUS_POPULATED		(1<<1)
 
 enum b3dfg_buffer_state {
-	B3DFG_BUFFER_POLLED,
+	B3DFG_BUFFER_POLLED = 0,
 	B3DFG_BUFFER_PENDING,
 	B3DFG_BUFFER_POPULATED,
 };
@@ -179,6 +179,16 @@ static void free_all_buffers(struct b3dfg_dev *fgdev)
 	kfree(fgdev->buffers);
 	fgdev->buffers = NULL;
 	fgdev->num_buffers = 0;
+}
+
+static void dequeue_all_buffers(struct b3dfg_dev *fgdev)
+{
+	int i;
+	for (i = 0; i < fgdev->num_buffers; i++) {
+		struct b3dfg_buffer *buf = &fgdev->buffers[i];
+		buf->state = B3DFG_BUFFER_POLLED;
+		list_del_init(&buf->list);
+	}
 }
 
 /* initialize a buffer: allocate its frames, set default values */
@@ -454,6 +464,7 @@ static int set_transmission(struct b3dfg_dev *fgdev, int enabled)
 	if (!enabled) {
 		u32 tmp = b3dfg_read32(fgdev, B3D_REG_DMA_STS);
 		printk("brontes DMA_STS reads %x after TX stopped\n", tmp);
+		dequeue_all_buffers(fgdev);
 	}
 	return 0;
 }
