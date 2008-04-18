@@ -22,6 +22,7 @@
 #include <linux/device.h>
 #include <linux/fs.h>
 #include <linux/interrupt.h>
+#include <linux/spinlock.h>
 #include <linux/ioctl.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
@@ -123,6 +124,7 @@ struct b3dfg_dev {
 
 	int mapping_count;
 
+	spinlock_t irq_lock;
 	int transmission_enabled;
 	int cur_dma_frame_idx;
 	dma_addr_t cur_dma_frame_addr;
@@ -461,10 +463,16 @@ static int enable_transmission(struct b3dfg_dev *fgdev)
 
 static void disable_transmission(struct b3dfg_dev *fgdev)
 {
+	unsigned long flags;
 	u32 tmp;
+
 	printk(KERN_INFO PFX "disable transmission\n");
 
+	/* guarantee that no more interrupts will be serviced */
+	spin_lock_irqsave(&fgdev->irq_lock, flags);
 	fgdev->transmission_enabled = 0;
+	spin_unlock_irqrestore(&fgdev->irq_lock, flags);
+
 	b3dfg_write32(fgdev, B3D_REG_HW_CTRL, 0);
 
 	/* reset dropped triplet counter */
@@ -484,9 +492,8 @@ static int set_transmission(struct b3dfg_dev *fgdev, int enabled)
 	return 0;
 }
 
-static irqreturn_t b3dfg_intr(int irq, void *dev_id)
+static irqreturn_t handle_interrupt(struct b3dfg_dev *fgdev)
 {
-	struct b3dfg_dev *fgdev = dev_id;
 	struct device *dev;
 	struct b3dfg_buffer *buf = NULL;
 	unsigned int frame_size;
@@ -601,6 +608,17 @@ out:
 	return IRQ_HANDLED;
 }
 
+static irqreturn_t b3dfg_intr(int irq, void *dev_id)
+{
+	struct b3dfg_dev *fgdev = dev_id;
+	irqreturn_t ret;
+
+	spin_lock(&fgdev->irq_lock);
+	ret = handle_interrupt(fgdev);
+	spin_unlock(&fgdev->irq_lock);
+	return ret;
+}
+
 static int b3dfg_open(struct inode *inode, struct file *filp)
 {
 	struct b3dfg_dev *fgdev =
@@ -696,6 +714,7 @@ static void b3dfg_init_dev(struct b3dfg_dev *fgdev)
 	fgdev->frame_size = frm_size * 4096;
 	INIT_LIST_HEAD(&fgdev->buffer_queue);
 	init_waitqueue_head(&fgdev->buffer_waitqueue);
+	spin_lock_init(&fgdev->irq_lock);
 }
 
 /* find next free minor number, returns -1 if none are availabile */
