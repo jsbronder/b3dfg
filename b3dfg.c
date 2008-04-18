@@ -297,9 +297,9 @@ static int queue_buffer(struct b3dfg_dev *fgdev, int bufidx)
 		return -EINVAL;
 	}
 
-	list_add_tail(&buf->list, &fgdev->buffer_queue);
 	buf->nr_populated_frames = 0;
 	buf->state = B3DFG_BUFFER_PENDING;
+	list_add_tail(&buf->list, &fgdev->buffer_queue);
 	return 0;
 }
 
@@ -437,35 +437,50 @@ static struct vm_operations_struct b3dfg_vm_ops = {
 #endif
 };
 
-static int set_transmission(struct b3dfg_dev *fgdev, int enabled)
+static int enable_transmission(struct b3dfg_dev *fgdev)
 {
-	printk(KERN_INFO PFX "%s transmission\n",
-		(enabled) ? "enable" : "disable");
-	
-	if (enabled) {
-		/* check we're a bus master */
-		u16 command;
-		pci_read_config_word(fgdev->pdev, PCI_COMMAND, &command);
-		if (!(command & PCI_COMMAND_MASTER)) {
-			printk(KERN_ERR PFX "cannot transmit; am not a bus master\n");
-			return -EIO;
-		}
-		if (fgdev->num_buffers == 0) {
-			printk(KERN_ERR PFX "cannot start transmission to 0 buffers\n");
-			return -EINVAL;
-		}
+	u16 command;
+	printk(KERN_INFO PFX "enable transmission\n");
+
+	/* check we're a bus master */
+	pci_read_config_word(fgdev->pdev, PCI_COMMAND, &command);
+	if (!(command & PCI_COMMAND_MASTER)) {
+		printk(KERN_ERR PFX "cannot transmit; am not a bus master\n");
+		return -EIO;
 	}
 
-	fgdev->transmission_enabled = enabled;
-	b3dfg_write32(fgdev, B3D_REG_HW_CTRL, enabled & 0x1);
+	if (fgdev->num_buffers == 0) {
+		printk(KERN_ERR PFX "cannot start transmission to 0 buffers\n");
+		return -EINVAL;
+	}
+
+	fgdev->transmission_enabled = 1;
+	b3dfg_write32(fgdev, B3D_REG_HW_CTRL, 1);
+	return 0;
+}
+
+static void disable_transmission(struct b3dfg_dev *fgdev)
+{
+	u32 tmp;
+	printk(KERN_INFO PFX "disable transmission\n");
+
+	fgdev->transmission_enabled = 0;
+	b3dfg_write32(fgdev, B3D_REG_HW_CTRL, 0);
 
 	/* reset dropped triplet counter */
 	/* FIXME will this throw away useful dma data too? */
-	if (!enabled) {
-		u32 tmp = b3dfg_read32(fgdev, B3D_REG_DMA_STS);
-		printk("brontes DMA_STS reads %x after TX stopped\n", tmp);
-		dequeue_all_buffers(fgdev);
-	}
+	tmp = b3dfg_read32(fgdev, B3D_REG_DMA_STS);
+	printk("brontes DMA_STS reads %x after TX stopped\n", tmp);
+
+	dequeue_all_buffers(fgdev);
+}
+
+static int set_transmission(struct b3dfg_dev *fgdev, int enabled)
+{
+	if (enabled && !fgdev->transmission_enabled)
+		return enable_transmission(fgdev);
+	else if (!enabled && fgdev->transmission_enabled)
+		disable_transmission(fgdev);
 	return 0;
 }
 
