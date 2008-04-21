@@ -225,7 +225,7 @@ void b3dfg_log(enum b3dfg_log_level level, const char *function,
  * \param idx numerical index of the frame grabber you wish to open, usually 0
  * \returns a device handle, or NULL on error
  */
-API_EXPORTED struct b3dfg_dev *b3dfg_open(unsigned int idx)
+API_EXPORTED b3dfg_dev *b3dfg_open(unsigned int idx)
 {
 	struct b3dfg_dev *dev;
 	char filename[12];
@@ -279,7 +279,7 @@ API_EXPORTED struct b3dfg_dev *b3dfg_open(unsigned int idx)
  *
  * \param dev the device to close
  */
-API_EXPORTED void b3dfg_close(struct b3dfg_dev *dev)
+API_EXPORTED void b3dfg_close(b3dfg_dev *dev)
 {
 	if (!dev)
 		return;
@@ -299,7 +299,7 @@ API_EXPORTED void b3dfg_close(struct b3dfg_dev *dev)
  * \param dev a device handle
  * \returns a file descriptor corresponding to the device handle
  */
-API_EXPORTED int b3dfg_get_fd(struct b3dfg_dev *dev)
+API_EXPORTED int b3dfg_get_fd(b3dfg_dev *dev)
 {
 	return dev->fd;
 }
@@ -311,7 +311,7 @@ API_EXPORTED int b3dfg_get_fd(struct b3dfg_dev *dev)
  * \param dev a device handle
  * \returns the frame size in bytes
  */
-API_EXPORTED unsigned int b3dfg_get_frame_size(struct b3dfg_dev *dev)
+API_EXPORTED unsigned int b3dfg_get_frame_size(b3dfg_dev *dev)
 {
 	return dev->frame_size;
 }
@@ -326,7 +326,7 @@ API_EXPORTED unsigned int b3dfg_get_frame_size(struct b3dfg_dev *dev)
  * \param enabled 1 to enable transmission, 0 to disable
  * \returns 0 on success, non-zero on error
  */
-API_EXPORTED int b3dfg_set_transmission(struct b3dfg_dev *dev, int enabled)
+API_EXPORTED int b3dfg_set_transmission(b3dfg_dev *dev, int enabled)
 {
 	int r;
 	b3dfg_dbg("%s", enabled ? "enabled" : "disabled");
@@ -350,7 +350,7 @@ API_EXPORTED int b3dfg_set_transmission(struct b3dfg_dev *dev, int enabled)
  * \param buffers the number of buffers to keep in the pool
  * \returns 0 on success, non-zero on error
  */
-API_EXPORTED int b3dfg_set_num_buffers(struct b3dfg_dev *dev, int buffers)
+API_EXPORTED int b3dfg_set_num_buffers(b3dfg_dev *dev, int buffers)
 {
 	int r;
 	b3dfg_dbg("%d buffers", buffers);
@@ -370,7 +370,7 @@ API_EXPORTED int b3dfg_set_num_buffers(struct b3dfg_dev *dev, int buffers)
  * \param buffer the buffer to queue
  * \returns 0 on success, non-zero on error
  */
-API_EXPORTED int b3dfg_queue_buffer(struct b3dfg_dev *dev, int buffer)
+API_EXPORTED int b3dfg_queue_buffer(b3dfg_dev *dev, int buffer)
 {
 	int r;
 	
@@ -396,7 +396,7 @@ API_EXPORTED int b3dfg_queue_buffer(struct b3dfg_dev *dev, int buffer)
  * \returns 0 otherwise
  * \returns negative on error
  */
-API_EXPORTED int b3dfg_poll_buffer(struct b3dfg_dev *dev, int buffer)
+API_EXPORTED int b3dfg_poll_buffer(b3dfg_dev *dev, int buffer)
 {
 	int r;
 
@@ -429,7 +429,7 @@ API_EXPORTED int b3dfg_poll_buffer(struct b3dfg_dev *dev, int buffer)
  * polled state)
  * \returns non-zero on error
  */
-API_EXPORTED int b3dfg_wait_buffer(struct b3dfg_dev *dev, int buffer)
+API_EXPORTED int b3dfg_wait_buffer(b3dfg_dev *dev, int buffer)
 {
 	int r;
 
@@ -446,7 +446,8 @@ API_EXPORTED int b3dfg_wait_buffer(struct b3dfg_dev *dev, int buffer)
  * located contiguously throughout this mapping, starting from buffer 0.
  * Inside each buffer, each frame is located contiguously, in red-green-blue
  * order. You can use simple arithmetic based on the size of a frame in order
- * to locate any frame within the mapping.
+ * to locate any frame within the mapping. The mapping is of size precisely
+ * big enough to accomodate all of the allocated buffers and their frames.
  *
  * This function can only be called after a specified number of buffers
  * have been set with b3dfg_set_num_buffers(). You cannot map the buffers
@@ -459,13 +460,12 @@ API_EXPORTED int b3dfg_wait_buffer(struct b3dfg_dev *dev, int buffer)
  * \param dev a device handle
  * \param prefault whether to prefault the buffers or not. If prefault=0, you
  * will incur a small performance penalty the first time you access each 4kb
- * page within the mapping. If set, this parameter causes the system to access
- * each page immediately so that no performance penalty occurs later.
+ * page within the mapping. If non-zero, this parameter causes the system to
+ * access each page immediately so that no performance penalty occurs later.
  * \returns the address of the new mapping
  * \returns NULL on error
  */
-API_EXPORTED unsigned char *b3dfg_map_buffers(struct b3dfg_dev *dev,
-	int prefault)
+API_EXPORTED unsigned char *b3dfg_map_buffers(b3dfg_dev *dev, int prefault)
 {
 	unsigned char *mapping;
 	int flags = MAP_SHARED;
@@ -499,7 +499,7 @@ API_EXPORTED unsigned char *b3dfg_map_buffers(struct b3dfg_dev *dev,
  * \returns the address of the active mapping
  * \returns NULL if there is no active mapping
  */
-API_EXPORTED unsigned char *b3dfg_get_mapping(struct b3dfg_dev *dev)
+API_EXPORTED unsigned char *b3dfg_get_mapping(b3dfg_dev *dev)
 {
 	return dev->mapping;
 }
@@ -509,9 +509,11 @@ API_EXPORTED unsigned char *b3dfg_get_mapping(struct b3dfg_dev *dev)
  * to call this function even when there is no active mapping, in which case
  * this function simply returns.
  *
+ * Do not attempt to access any previous mapping after calling this function.
+ *
  * \param dev a device handle
  */
-API_EXPORTED void b3dfg_unmap_buffers(struct b3dfg_dev *dev)
+API_EXPORTED void b3dfg_unmap_buffers(b3dfg_dev *dev)
 {
 	int r;
 	if (!dev->mapping)
