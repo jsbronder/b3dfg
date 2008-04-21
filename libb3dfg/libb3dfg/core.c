@@ -423,6 +423,8 @@ API_EXPORTED int b3dfg_poll_buffer(struct b3dfg_dev *dev, int buffer)
  * Upon success (i.e. frame data is present in buffer), this function call
  * automatically moves the buffer from the populated state to the polled state.
  *
+ * \param dev a device handle
+ * \param buffer the buffer to wait upon
  * \returns 0 on success (buffer now contains data and has been moved to
  * polled state)
  * \returns non-zero on error
@@ -438,6 +440,30 @@ API_EXPORTED int b3dfg_wait_buffer(struct b3dfg_dev *dev, int buffer)
 	return r;
 }
 
+/** \ingroup io
+ * Map frame buffers into process address space. This function returns the
+ * base address of a mapping where you can find the image data. Buffers are
+ * located contiguously throughout this mapping, starting from buffer 0.
+ * Inside each buffer, each frame is located contiguously, in red-green-blue
+ * order. You can use simple arithmetic based on the size of a frame in order
+ * to locate any frame within the mapping.
+ *
+ * This function can only be called after a specified number of buffers
+ * have been set with b3dfg_set_num_buffers(). You cannot map the buffers
+ * twice, but you can use b3dfg_get_mapping() to retrieve the address of
+ * an already-created mapping.
+ * 
+ * You must unmap the buffer with b3dfg_unmap_buffers() before altering
+ * the number of buffers.
+ *
+ * \param dev a device handle
+ * \param prefault whether to prefault the buffers or not. If prefault=0, you
+ * will incur a small performance penalty the first time you access each 4kb
+ * page within the mapping. If set, this parameter causes the system to access
+ * each page immediately so that no performance penalty occurs later.
+ * \returns the address of the new mapping
+ * \returns NULL on error
+ */
 API_EXPORTED unsigned char *b3dfg_map_buffers(struct b3dfg_dev *dev,
 	int prefault)
 {
@@ -465,11 +491,26 @@ API_EXPORTED unsigned char *b3dfg_map_buffers(struct b3dfg_dev *dev,
 	return mapping;
 }
 
+/** \ingroup io
+ * Obtain the base address a mapping previously created with
+ * b3dfg_map_buffers().
+ *
+ * \param dev a device handle
+ * \returns the address of the active mapping
+ * \returns NULL if there is no active mapping
+ */
 API_EXPORTED unsigned char *b3dfg_get_mapping(struct b3dfg_dev *dev)
 {
 	return dev->mapping;
 }
 
+/** \ingroup io
+ * Unmap the mapping previously created with b3dfg_map_buffers(). It is legal
+ * to call this function even when there is no active mapping, in which case
+ * this function simply returns.
+ *
+ * \param dev a device handle
+ */
 API_EXPORTED void b3dfg_unmap_buffers(struct b3dfg_dev *dev)
 {
 	int r;
@@ -484,11 +525,24 @@ API_EXPORTED void b3dfg_unmap_buffers(struct b3dfg_dev *dev)
 	dev->mapping = NULL;
 }
 
+/** \ingroup core
+ * Initialize the library. This function should be called before any other
+ * libb3dfg function is called.
+ *
+ * \returns 0 on success
+ * \returns non-zero on error
+ */
 API_EXPORTED int b3dfg_init(void)
 {
 	return 0;
 }
 
+/** \ingroup core
+ * Deinitialize the library and clean up resources. Calling this functional
+ * is optional (if you do not, all cleanup happens at exit anyway). Do not call
+ * any libb3dfg functions after calling this function unless you call
+ * b3dfg_init() again.
+ */
 API_EXPORTED void b3dfg_exit(void)
 {
 
