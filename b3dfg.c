@@ -492,6 +492,28 @@ static int set_transmission(struct b3dfg_dev *fgdev, int enabled)
 	return 0;
 }
 
+static void setup_frame_transfer(struct b3dfg_dev *fgdev,
+	struct b3dfg_buffer *buf, int frame, int acknowledge)
+{
+	unsigned char *frm_addr;
+	dma_addr_t frm_addr_dma;
+	struct device *dev = &fgdev->pdev->dev;
+	unsigned int frame_size = fgdev->frame_size;
+	unsigned char dma_sts = 0xd;
+
+	frm_addr = buf->frame[frame];
+	frm_addr_dma = dma_map_single(dev, frm_addr, frame_size, DMA_FROM_DEVICE);
+	fgdev->cur_dma_frame_addr = frm_addr_dma;
+	fgdev->cur_dma_frame_idx = frame;
+
+	b3dfg_write32(fgdev, B3D_REG_EC220_DMA_ADDR, cpu_to_le32(frm_addr_dma));
+	b3dfg_write32(fgdev, B3D_REG_EC220_TRF_SIZE, cpu_to_le32(frame_size >> 2));
+
+	if (likely(acknowledge))
+		dma_sts |= 0x2;
+	b3dfg_write32(fgdev, B3D_REG_EC220_DMA_STS, 0xf);
+}
+
 static int nr_unhandled = 0;
 
 static void unhandled_irq(void)
@@ -561,9 +583,7 @@ static irqreturn_t handle_interrupt(struct b3dfg_dev *fgdev)
 
 		buf = list_entry(fgdev->buffer_queue.next, struct b3dfg_buffer, list);
 		if (likely(buf)) {
-			unsigned char *tmp = buf->frame[tmpidx];
-			printk("handle frame completion start=%02x%02x%02x%02x\n",
-				tmp[0], tmp[1], tmp[2], tmp[3]);
+			printk("handle frame completion\n");
 			if (++buf->nr_populated_frames == B3DFG_FRAMES_PER_BUFFER) {
 				/* last frame of that triplet completed */
 				printk("triplet completed\n");
@@ -577,8 +597,6 @@ static irqreturn_t handle_interrupt(struct b3dfg_dev *fgdev)
 	}
 
 	if (next_trf) {
-		unsigned char *frm_addr;
-		dma_addr_t frm_addr_dma;
 		next_trf--;
 
 		buf = list_entry(fgdev->buffer_queue.next, struct b3dfg_buffer, list);
@@ -590,23 +608,7 @@ static irqreturn_t handle_interrupt(struct b3dfg_dev *fgdev)
 				/* FIXME this is where we should handle dropped triplets */
 				goto out;
 			}
-			fgdev->cur_dma_frame_idx = next_trf;
-			frm_addr = buf->frame[next_trf];
-
-			frm_addr[0] = 0xb3;
-			frm_addr[1] = 0xb4;
-			frm_addr[2] = 0xb5;
-			frm_addr[3] = 0xb6;
-
-			frm_addr_dma = dma_map_single(dev, frm_addr, frame_size,
-				DMA_FROM_DEVICE);
-			fgdev->cur_dma_frame_addr = frm_addr_dma;
-			b3dfg_write32(fgdev, B3D_REG_EC220_DMA_ADDR,
-				cpu_to_le32(frm_addr_dma));
-			b3dfg_write32(fgdev, B3D_REG_EC220_TRF_SIZE,
-				cpu_to_le32(frame_size >> 2));
-			b3dfg_write32(fgdev, B3D_REG_EC220_DMA_STS, 0xf);
-			b3dfg_read32(fgdev, B3D_REG_EC220_DMA_STS);
+			setup_frame_transfer(fgdev, buf, next_trf, 1);
 			need_ack = 0;
 		} else {
 			printk("cannot setup next DMA due to no buffer\n");

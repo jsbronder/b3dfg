@@ -13,7 +13,7 @@
 
 #include <libb3dfg/b3dfg.h>
 
-#define NUM_BUFFERS 8
+#define NUM_BUFFERS 1
 
 static b3dfg_dev *dev;
 static unsigned char *mapping;
