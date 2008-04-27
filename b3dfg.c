@@ -510,8 +510,6 @@ static irqreturn_t handle_interrupt(struct b3dfg_dev *fgdev)
 	sts = b3dfg_read32(fgdev, B3D_REG_DMA_STS);
 	if (unlikely(sts == 0)) {
 		printk("ignore interrupt, brontes DMA status is 0\n");
-		/* temporarily dont ack, req by jerry 20080418 */
-		need_ack = 0;
 		/* FIXME should return IRQ_NONE when we are stable */
 		goto out;
 	}
