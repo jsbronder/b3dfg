@@ -105,7 +105,6 @@ enum b3dfg_buffer_state {
 struct b3dfg_buffer {
 	unsigned char *frame[B3DFG_FRAMES_PER_BUFFER];
 	u8 state;
-	u8 nr_populated_frames;
 	struct list_head list;
 };
 
@@ -127,6 +126,8 @@ struct b3dfg_dev {
 	spinlock_t irq_lock;
 	int cur_dma_frame_idx;
 	dma_addr_t cur_dma_frame_addr;
+
+	int discard_frame_start;
 
 	unsigned int transmission_enabled:1;
 	unsigned int triplet_ready:1;
@@ -328,14 +329,13 @@ static int queue_buffer(struct b3dfg_dev *fgdev, int bufidx)
 		return -EINVAL;
 	}
 
-	buf->nr_populated_frames = 0;
 	buf->state = B3DFG_BUFFER_PENDING;
 	list_add_tail(&buf->list, &fgdev->buffer_queue);
 
 	if (fgdev->triplet_ready) {
 		printk("triplet is ready, so pushing immediately\n");
 		fgdev->triplet_ready = 0;
-		setup_frame_transfer(fgdev, buf, 0, 0);
+		setup_frame_transfer(fgdev, buf, fgdev->discard_frame_start, 0);
 	}
 
 	return 0;
@@ -478,6 +478,8 @@ static struct vm_operations_struct b3dfg_vm_ops = {
 static int enable_transmission(struct b3dfg_dev *fgdev)
 {
 	u16 command;
+	unsigned int next_trf;
+
 	printk(KERN_INFO PFX "enable transmission\n");
 
 	/* check we're a bus master */
@@ -492,8 +494,21 @@ static int enable_transmission(struct b3dfg_dev *fgdev)
 		return -EINVAL;
 	}
 
+	next_trf = b3dfg_read32(fgdev, B3D_REG_DMA_STS) & 0x3;
+	if (next_trf > 1) {
+		/* device is going to present frame 2/3 or 3/3 first. as this forms
+		 * an incomplete triplet, we must discard those frames and then start
+		 * fresh at the beginning of the following triplet. */
+		printk(KERN_INFO PFX "detecting incomplete initial triplet starting "
+			"from frame %d, will discard\n", next_trf);
+		fgdev->discard_frame_start = next_trf - 1;
+	} else {
+		fgdev->discard_frame_start = 0;
+	}
+
 	fgdev->triplet_ready = 0;
 	fgdev->transmission_enabled = 1;
+	fgdev->cur_dma_frame_idx = -1;
 	b3dfg_write32(fgdev, B3D_REG_HW_CTRL, 1);
 	return 0;
 }
@@ -581,7 +596,6 @@ static irqreturn_t handle_interrupt(struct b3dfg_dev *fgdev)
 	next_trf = sts & 0x3;
 
 	if (sts & 0x4) {
-		int tmpidx;
 		u32 tmp;
 
 		tmp = b3dfg_read32(fgdev, B3D_REG_EC220_DMA_STS);
@@ -594,18 +608,22 @@ static irqreturn_t handle_interrupt(struct b3dfg_dev *fgdev)
 		}
 		dma_unmap_single(dev, fgdev->cur_dma_frame_addr, frame_size,
 			DMA_FROM_DEVICE);
-		tmpidx = fgdev->cur_dma_frame_idx;
-		fgdev->cur_dma_frame_idx = -1;
 
 		buf = list_entry(fgdev->buffer_queue.next, struct b3dfg_buffer, list);
 		if (likely(buf)) {
 			printk("handle frame completion\n");
-			if (++buf->nr_populated_frames == B3DFG_FRAMES_PER_BUFFER) {
+			if (fgdev->cur_dma_frame_idx == B3DFG_FRAMES_PER_BUFFER - 1) {
 				/* last frame of that triplet completed */
 				printk("triplet completed\n");
-				buf->state = B3DFG_BUFFER_POPULATED;
-				list_del_init(&buf->list);
-				wake_up_interruptible(&fgdev->buffer_waitqueue);
+
+				if (fgdev->discard_frame_start) {
+					fgdev->discard_frame_start = 0;
+					printk(KERN_INFO PFX "discarded incomplete triplet\n");
+				} else {
+					buf->state = B3DFG_BUFFER_POPULATED;
+					list_del_init(&buf->list);
+					wake_up_interruptible(&fgdev->buffer_waitqueue);
+				}
 			}
 		} else {
 			printk("got frame but no buffer!\n");
@@ -618,9 +636,10 @@ static irqreturn_t handle_interrupt(struct b3dfg_dev *fgdev)
 		buf = list_entry(fgdev->buffer_queue.next, struct b3dfg_buffer, list);
 		printk("program DMA transfer for frame %d\n", next_trf + 1);
 		if (likely(buf)) {
-			if (next_trf != buf->nr_populated_frames) {
-				printk("ERROR mismatch, nr_populated_frames=%d\n",
-					buf->nr_populated_frames);
+			if (!fgdev->discard_frame_start &&
+					next_trf != fgdev->cur_dma_frame_idx + 1) {
+				printk("ERROR mismatch, next_trf %d vs cur_dma_frame_idx %d\n",
+					next_trf, fgdev->cur_dma_frame_idx);
 				/* FIXME this is where we should handle dropped triplets */
 				goto out;
 			}
@@ -629,6 +648,8 @@ static irqreturn_t handle_interrupt(struct b3dfg_dev *fgdev)
 		} else {
 			printk("cannot setup next DMA due to no buffer\n");
 		}
+	} else {
+		fgdev->cur_dma_frame_idx = -1;
 	}
 
 out:
