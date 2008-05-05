@@ -346,6 +346,8 @@ API_EXPORTED int b3dfg_set_transmission(b3dfg_dev *dev, int enabled)
  * This function cannot be called when a mapping is active or transmission
  * is enabled.
  *
+ * This function will dequeue all buffers that were previously queued.
+ *
  * \param dev a device handle
  * \param buffers the number of buffers to keep in the pool
  * \returns 0 on success, non-zero on error

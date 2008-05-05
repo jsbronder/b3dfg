@@ -236,6 +236,10 @@ static int set_num_buffers(struct b3dfg_dev *fgdev, int num_buffers)
 		return -EBUSY;
 	}
 
+	/* as we may be freeing buffers, the only sensible implementation is to
+	 * dequeue ALL buffers when the user changes the pool size */
+	dequeue_all_buffers(fgdev);
+
 	if (!fgdev->buffers) {
 		/* no buffers allocated yet */
 		fgdev->buffers = kmalloc(num_buffers * sizeof(struct b3dfg_buffer),
