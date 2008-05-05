@@ -651,6 +651,7 @@ static int b3dfg_release(struct inode *inode, struct file *filp)
 	struct b3dfg_dev *fgdev = filp->private_data;
 	printk(KERN_INFO PFX "release\n");
 	set_transmission(fgdev, 0);
+	dequeue_all_buffers(fgdev);
 	return set_num_buffers(fgdev, 0);
 }
 
