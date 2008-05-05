@@ -332,7 +332,7 @@ static int queue_buffer(struct b3dfg_dev *fgdev, int bufidx)
 	buf->state = B3DFG_BUFFER_PENDING;
 	list_add_tail(&buf->list, &fgdev->buffer_queue);
 
-	if (fgdev->triplet_ready) {
+	if (fgdev->transmission_enabled && fgdev->triplet_ready) {
 		printk("triplet is ready, so pushing immediately\n");
 		fgdev->triplet_ready = 0;
 		setup_frame_transfer(fgdev, buf, fgdev->discard_frame_start, 0);
