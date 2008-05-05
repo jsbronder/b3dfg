@@ -125,9 +125,11 @@ struct b3dfg_dev {
 	int mapping_count;
 
 	spinlock_t irq_lock;
-	int transmission_enabled;
 	int cur_dma_frame_idx;
 	dma_addr_t cur_dma_frame_addr;
+
+	unsigned int transmission_enabled:1;
+	unsigned int triplet_ready:1;
 };
 
 static u8 b3dfg_devices[B3DFG_MAX_DEVS];
@@ -153,6 +155,29 @@ static void b3dfg_write32(struct b3dfg_dev *fgdev, u16 reg, u32 value)
 }
 
 /**** buffer management ****/
+
+/* program EC220 for transfer of a specific frame */
+static void setup_frame_transfer(struct b3dfg_dev *fgdev,
+	struct b3dfg_buffer *buf, int frame, int acknowledge)
+{
+	unsigned char *frm_addr;
+	dma_addr_t frm_addr_dma;
+	struct device *dev = &fgdev->pdev->dev;
+	unsigned int frame_size = fgdev->frame_size;
+	unsigned char dma_sts = 0xd;
+
+	frm_addr = buf->frame[frame];
+	frm_addr_dma = dma_map_single(dev, frm_addr, frame_size, DMA_FROM_DEVICE);
+	fgdev->cur_dma_frame_addr = frm_addr_dma;
+	fgdev->cur_dma_frame_idx = frame;
+
+	b3dfg_write32(fgdev, B3D_REG_EC220_DMA_ADDR, cpu_to_le32(frm_addr_dma));
+	b3dfg_write32(fgdev, B3D_REG_EC220_TRF_SIZE, cpu_to_le32(frame_size >> 2));
+
+	if (likely(acknowledge))
+		dma_sts |= 0x2;
+	b3dfg_write32(fgdev, B3D_REG_EC220_DMA_STS, 0xf);
+}
 
 /* retrieve a buffer pointer from a buffer index. also checks that the
  * requested buffer actually exists. */
@@ -306,6 +331,13 @@ static int queue_buffer(struct b3dfg_dev *fgdev, int bufidx)
 	buf->nr_populated_frames = 0;
 	buf->state = B3DFG_BUFFER_PENDING;
 	list_add_tail(&buf->list, &fgdev->buffer_queue);
+
+	if (fgdev->triplet_ready) {
+		printk("triplet is ready, so pushing immediately\n");
+		fgdev->triplet_ready = 0;
+		setup_frame_transfer(fgdev, buf, 0, 0);
+	}
+
 	return 0;
 }
 
@@ -460,6 +492,7 @@ static int enable_transmission(struct b3dfg_dev *fgdev)
 		return -EINVAL;
 	}
 
+	fgdev->triplet_ready = 0;
 	fgdev->transmission_enabled = 1;
 	b3dfg_write32(fgdev, B3D_REG_HW_CTRL, 1);
 	return 0;
@@ -494,28 +527,6 @@ static int set_transmission(struct b3dfg_dev *fgdev, int enabled)
 	else if (!enabled && fgdev->transmission_enabled)
 		disable_transmission(fgdev);
 	return 0;
-}
-
-static void setup_frame_transfer(struct b3dfg_dev *fgdev,
-	struct b3dfg_buffer *buf, int frame, int acknowledge)
-{
-	unsigned char *frm_addr;
-	dma_addr_t frm_addr_dma;
-	struct device *dev = &fgdev->pdev->dev;
-	unsigned int frame_size = fgdev->frame_size;
-	unsigned char dma_sts = 0xd;
-
-	frm_addr = buf->frame[frame];
-	frm_addr_dma = dma_map_single(dev, frm_addr, frame_size, DMA_FROM_DEVICE);
-	fgdev->cur_dma_frame_addr = frm_addr_dma;
-	fgdev->cur_dma_frame_idx = frame;
-
-	b3dfg_write32(fgdev, B3D_REG_EC220_DMA_ADDR, cpu_to_le32(frm_addr_dma));
-	b3dfg_write32(fgdev, B3D_REG_EC220_TRF_SIZE, cpu_to_le32(frame_size >> 2));
-
-	if (likely(acknowledge))
-		dma_sts |= 0x2;
-	b3dfg_write32(fgdev, B3D_REG_EC220_DMA_STS, 0xf);
 }
 
 static int nr_unhandled = 0;
@@ -563,6 +574,7 @@ static irqreturn_t handle_interrupt(struct b3dfg_dev *fgdev)
 	if (unlikely(list_empty(&fgdev->buffer_queue))) {
 		/* FIXME need more sanity checking here */
 		printk("driver has no buffer ready --> cannot program any more transfers\n");
+		fgdev->triplet_ready = 1;
 		goto out;
 	}
 	
