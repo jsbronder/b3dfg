@@ -109,16 +109,19 @@ struct b3dfg_buffer {
 };
 
 struct b3dfg_dev {
+	/* no protection needed: all finalized at initialization time */
 	struct pci_dev *pdev;
     struct cdev chardev;
     struct class_device *classdev;
 	void __iomem *regs;
-
 	unsigned int frame_size;
-	
+
+	/* buffers_lock protects num_buffers, buffers, buffer_queue */
+	spinlock_t buffer_lock;
 	int num_buffers;
 	struct b3dfg_buffer *buffers;
 	struct list_head buffer_queue;
+
 	wait_queue_head_t buffer_waitqueue;
 
 	int mapping_count;
@@ -180,7 +183,7 @@ static void setup_frame_transfer(struct b3dfg_dev *fgdev,
 }
 
 /* retrieve a buffer pointer from a buffer index. also checks that the
- * requested buffer actually exists. */
+ * requested buffer actually exists. buffer_lock should be held by caller */
 static inline struct b3dfg_buffer *buffer_from_idx(struct b3dfg_dev *fgdev,
 	int idx)
 {
@@ -189,7 +192,6 @@ static inline struct b3dfg_buffer *buffer_from_idx(struct b3dfg_dev *fgdev,
 	return &fgdev->buffers[idx];
 }
 
-/* free the frames in a buffer */
 static void free_buffer(struct b3dfg_buffer *buf)
 {
 	int i;
@@ -197,6 +199,7 @@ static void free_buffer(struct b3dfg_buffer *buf)
 		kfree(buf->frame[i]);
 }
 
+/* caller should hold buffer lock */
 static void free_all_buffers(struct b3dfg_dev *fgdev)
 {
 	int i;
@@ -246,7 +249,10 @@ static int set_num_buffers(struct b3dfg_dev *fgdev, int num_buffers)
 {
 	int i;
 	int r;
-	struct b3dfg_buffer *newbufs;
+	struct b3dfg_buffer *buffers;
+	unsigned long flags;
+
+	/* FIXME: protect against TX enable while still allocating buffers */
 
 	printk(KERN_INFO PFX "set %d buffers\n", num_buffers);
 	if (fgdev->transmission_enabled) {
@@ -261,71 +267,62 @@ static int set_num_buffers(struct b3dfg_dev *fgdev, int num_buffers)
 		return -EBUSY;
 	}
 
-	/* as we may be freeing buffers, the only sensible implementation is to
-	 * dequeue ALL buffers when the user changes the pool size */
-	dequeue_all_buffers(fgdev);
-
-	if (!fgdev->buffers) {
-		/* no buffers allocated yet */
-		fgdev->buffers = kmalloc(num_buffers * sizeof(struct b3dfg_buffer),
-			GFP_KERNEL);
-		if (!fgdev->buffers)
-			return -ENOMEM;
-
-		for (i = 0; i < num_buffers; i++) {
-			r = init_buffer(fgdev, &fgdev->buffers[i]);
-			if (r)
-				goto err;
-		}
-	} else if (num_buffers == 0) {
-		free_all_buffers(fgdev);
-	} else if (fgdev->num_buffers < num_buffers) {
-		/* app requested more buffers than we currently have allocated */
-		newbufs = krealloc(fgdev->buffers,
-			num_buffers * sizeof(struct b3dfg_buffer), GFP_KERNEL);
-		if (!newbufs) {
-			r = -ENOMEM;
-			goto err;
-		}
-
-		for (i = fgdev->num_buffers; i < num_buffers; i++) {
-			r = init_buffer(fgdev, &newbufs[i]);
-			if (r)
-				goto err;
-		}
-		fgdev->buffers = newbufs;
-	} else if (fgdev->num_buffers > num_buffers) {
-		/* app requests a decrease in buffers */
-		for (i = num_buffers; i < fgdev->num_buffers; i++)
-			free_buffer(&fgdev->buffers[i]);
-
-		newbufs = krealloc(fgdev->buffers,
-			num_buffers * sizeof(struct b3dfg_buffer), GFP_KERNEL);
-		if (!newbufs) {
-			r = -ENOMEM;
-			goto err;
-		}
-
-		fgdev->buffers = newbufs;
+	spin_lock_irqsave(&fgdev->buffer_lock, flags);
+	if (num_buffers == fgdev->num_buffers) {
+		spin_unlock_irqrestore(&fgdev->buffer_lock, flags);
+		return 0;
 	}
-	fgdev->num_buffers = num_buffers;
-	return 0;
 
-err:
+	/* free all buffers then allocate new ones */
+	dequeue_all_buffers(fgdev);
 	free_all_buffers(fgdev);
-	return r;
+
+	/* must unlock to allocate GFP_KERNEL memory */
+	spin_unlock_irqrestore(&fgdev->buffer_lock, flags);
+
+	buffers = kmalloc(num_buffers * sizeof(struct b3dfg_buffer),
+		GFP_KERNEL);
+	if (!buffers)
+		return -ENOMEM;
+
+	for (i = 0; i < num_buffers; i++) {
+		r = init_buffer(fgdev, &buffers[i]);
+		if (r) {
+			int j;
+			/* free all buffers allocated so far */
+			for (j = 0; j < i; j++)
+				free_buffer(&buffers[j]);
+			kfree(buffers);
+			return r;
+		}
+	}
+
+	spin_lock_irqsave(&fgdev->buffer_lock, flags);
+	fgdev->buffers = buffers;
+	fgdev->num_buffers = num_buffers;
+	spin_unlock_irqrestore(&fgdev->buffer_lock, flags);
+
+	return 0;
 }
 
 /* queue a buffer to receive data */
 static int queue_buffer(struct b3dfg_dev *fgdev, int bufidx)
 {
-	struct b3dfg_buffer *buf = buffer_from_idx(fgdev, bufidx);
-	if (unlikely(!buf))
-		return -ENOENT;
+	struct b3dfg_buffer *buf;
+	unsigned long flags;
+	int r = 0;
+
+	spin_lock_irqsave(&fgdev->buffer_lock, flags);
+	buf = buffer_from_idx(fgdev, bufidx);
+	if (unlikely(!buf)) {
+		r = -ENOENT;
+		goto out;
+	}
 
 	if (unlikely(buf->state == B3DFG_BUFFER_PENDING)) {
 		printk(KERN_ERR PFX "buffer %d is already queued", bufidx);
-		return -EINVAL;
+		r = -EINVAL;
+		goto out;
 	}
 
 	buf->state = B3DFG_BUFFER_PENDING;
@@ -337,16 +334,18 @@ static int queue_buffer(struct b3dfg_dev *fgdev, int bufidx)
 		setup_frame_transfer(fgdev, buf, fgdev->discard_frame_start, 0);
 	}
 
-	return 0;
+out:
+	spin_unlock_irqrestore(&fgdev->buffer_lock, flags);
+	return r;
 }
 
 /* non-blocking buffer poll. returns 1 if data is present in the buffer,
  * 0 otherwise */
 static int poll_buffer(struct b3dfg_dev *fgdev, int bufidx)
 {
-	struct b3dfg_buffer *buf = buffer_from_idx(fgdev, bufidx);
-	if (unlikely(!buf))
-		return -ENOENT;
+	struct b3dfg_buffer *buf;
+	unsigned long flags;
+	int r = 1;
 
 	if (unlikely(!fgdev->transmission_enabled)) {
 		printk(KERN_ERR PFX
@@ -354,23 +353,43 @@ static int poll_buffer(struct b3dfg_dev *fgdev, int bufidx)
 		return -EINVAL;
 	}
 
-	if (buf->state != B3DFG_BUFFER_POPULATED)
-		return 0;
+	spin_lock_irqsave(&fgdev->buffer_lock, flags);
+	buf = buffer_from_idx(fgdev, bufidx);
+	if (unlikely(!buf)) {
+		r = -ENOENT;
+		goto out;
+	}
+
+	if (buf->state != B3DFG_BUFFER_POPULATED) {
+		r = 0;
+		goto out;
+	}
 
 	if (likely(buf->state == B3DFG_BUFFER_POPULATED))
 		buf->state = B3DFG_BUFFER_POLLED;
 
-	return 1;
+out:
+	spin_unlock_irqrestore(&fgdev->buffer_lock, flags);
+	return r;
+}
+
+static u8 buffer_state(struct b3dfg_dev *fgdev, struct b3dfg_buffer *buf)
+{
+	unsigned long flags;
+	u8 state;
+
+	spin_lock_irqsave(&fgdev->buffer_lock, flags);
+	state = buf->state;
+	spin_unlock_irqrestore(&fgdev->buffer_lock, flags);
+	return state;
 }
 
 /* sleep until a specific buffer becomes populated */
 static int wait_buffer(struct b3dfg_dev *fgdev, int bufidx)
 {
-	struct b3dfg_buffer *buf = buffer_from_idx(fgdev, bufidx);
+	struct b3dfg_buffer *buf;
+	unsigned long flags;
 	int r;
-
-	if (unlikely(!buf))
-		return -ENOENT;
 
 	if (unlikely(!fgdev->transmission_enabled)) {
 		printk(KERN_ERR PFX
@@ -378,16 +397,33 @@ static int wait_buffer(struct b3dfg_dev *fgdev, int bufidx)
 		return -EINVAL;
 	}
 
-	if (buf->state == B3DFG_BUFFER_STATUS_POPULATED)
-		return 0;
+	spin_lock_irqsave(&fgdev->buffer_lock, flags);
+	buf = buffer_from_idx(fgdev, bufidx);
+	if (unlikely(!buf)) {
+		r = -ENOENT;
+		goto out;
+	}
 
+	if (buf->state == B3DFG_BUFFER_STATUS_POPULATED) {
+		r = 0;
+		goto out;
+	}
+
+	spin_unlock_irqrestore(&fgdev->buffer_lock, flags);
+	/* FIXME: what prevents the buffer going away at this time? */
 	r = wait_event_interruptible(fgdev->buffer_waitqueue,
-		buf->state == B3DFG_BUFFER_POPULATED);
+		buffer_state(fgdev, buf) == B3DFG_BUFFER_POPULATED);
 	if (unlikely(r))
 		return -ERESTARTSYS;
 
+	spin_lock_irqsave(&fgdev->buffer_lock, flags);
+	/* FIXME: relocate buffer? it might have changed during the unlocked
+	 * time */
 	buf->state = B3DFG_BUFFER_POLLED;
-	return 0;
+
+out:
+	spin_unlock_irqrestore(&fgdev->buffer_lock, flags);
+	return r;
 }
 
 /**** virtual memory mapping ****/
@@ -412,6 +448,7 @@ static int b3dfg_vma_fault(struct vm_area_struct *vma, struct vm_fault *vmf)
 	unsigned long off = vmf->pgoff << PAGE_SHIFT;
 	unsigned int frame_size = fgdev->frame_size;
 	unsigned int buf_size = frame_size * B3DFG_FRAMES_PER_BUFFER;
+	unsigned long flags;
 	struct page *page;
 
 	/* determine which buffer the offset lies within */
@@ -424,10 +461,14 @@ static int b3dfg_vma_fault(struct vm_area_struct *vma, struct vm_fault *vmf)
 	/* and the offset into the frame */
 	unsigned int frm_off = buf_off % frame_size;
 
-	if (unlikely(buf_idx > fgdev->num_buffers))
+	spin_lock_irqsave(&fgdev->buffer_lock, flags);
+	if (unlikely(buf_idx > fgdev->num_buffers)) {
+		spin_unlock_irqrestore(&fgdev->buffer_lock, flags);
 		return VM_FAULT_SIGBUS;
+	}
 
 	page = virt_to_page(fgdev->buffers[buf_idx].frame[frm_idx] + frm_off);
+	spin_unlock_irqrestore(&fgdev->buffer_lock, flags);
 	get_page(page);
 	vmf->page = page;
 	return 0;
@@ -441,6 +482,7 @@ static struct page *b3dfg_vma_nopage(struct vm_area_struct *vma,
 	unsigned long off = vma->vm_pgoff << PAGE_SHIFT;
 	unsigned int frame_size = fgdev->frame_size;
 	unsigned int buf_size = frame_size * B3DFG_FRAMES_PER_BUFFER;
+	unsigned long flags;
 	struct page *page;
 
 	/* determine which buffer the offset lies within */
@@ -453,10 +495,14 @@ static struct page *b3dfg_vma_nopage(struct vm_area_struct *vma,
 	/* and the offset into the frame */
 	unsigned int frm_off = buf_off % frame_size;
 
-	if (unlikely(buf_idx > fgdev->num_buffers))
+	spin_lock_irqsave(&fgdev->buffer_lock, flags);
+	if (unlikely(buf_idx > fgdev->num_buffers)) {
+		spin_unlock_irqrestore(&fgdev->buffer_lock, flags);
 		return NOPAGE_SIGBUS;
+	}
 
 	page = virt_to_page(fgdev->buffers[buf_idx].frame[frm_idx] + frm_off);
+	spin_unlock_irqrestore(&fgdev->buffer_lock, flags);
 	get_page(page);
 	if (*type)
 		*type = VM_FAULT_MINOR;
@@ -478,6 +524,7 @@ static int enable_transmission(struct b3dfg_dev *fgdev)
 {
 	u16 command;
 	unsigned int next_trf;
+	unsigned long flags;
 
 	printk(KERN_INFO PFX "enable transmission\n");
 
@@ -488,10 +535,13 @@ static int enable_transmission(struct b3dfg_dev *fgdev)
 		return -EIO;
 	}
 
+	spin_lock_irqsave(&fgdev->buffer_lock, flags);
 	if (fgdev->num_buffers == 0) {
+		spin_unlock_irqrestore(&fgdev->buffer_lock, flags);
 		printk(KERN_ERR PFX "cannot start transmission to 0 buffers\n");
 		return -EINVAL;
 	}
+	spin_unlock_irqrestore(&fgdev->buffer_lock, flags);
 
 	next_trf = b3dfg_read32(fgdev, B3D_REG_DMA_STS) & 0x3;
 	if (next_trf > 1) {
@@ -514,6 +564,7 @@ static int enable_transmission(struct b3dfg_dev *fgdev)
 
 static void disable_transmission(struct b3dfg_dev *fgdev)
 {
+	unsigned long flags;
 	u32 tmp;
 
 	printk(KERN_INFO PFX "disable transmission\n");
@@ -529,7 +580,9 @@ static void disable_transmission(struct b3dfg_dev *fgdev)
 	tmp = b3dfg_read32(fgdev, B3D_REG_DMA_STS);
 	printk("brontes DMA_STS reads %x after TX stopped\n", tmp);
 
+	spin_lock_irqsave(&fgdev->buffer_lock, flags);
 	dequeue_all_buffers(fgdev);
+	spin_unlock_irqrestore(&fgdev->buffer_lock, flags);
 }
 
 static int set_transmission(struct b3dfg_dev *fgdev, int enabled)
@@ -582,11 +635,12 @@ static irqreturn_t handle_interrupt(struct b3dfg_dev *fgdev)
 	dev = &fgdev->pdev->dev;
 	frame_size = fgdev->frame_size;
 
+	spin_lock(&fgdev->buffer_lock);
 	if (unlikely(list_empty(&fgdev->buffer_queue))) {
 		/* FIXME need more sanity checking here */
 		printk("driver has no buffer ready --> cannot program any more transfers\n");
 		fgdev->triplet_ready = 1;
-		goto out;
+		goto out_unlock;
 	}
 	
 	next_trf = sts & 0x3;
@@ -600,7 +654,7 @@ static irqreturn_t handle_interrupt(struct b3dfg_dev *fgdev)
 		if (unlikely(fgdev->cur_dma_frame_idx == -1)) {
 			printk("ERROR completed but no last idx?\n");
 			/* FIXME flesh out error handling */
-			goto out;
+			goto out_unlock;
 		}
 		dma_unmap_single(dev, fgdev->cur_dma_frame_addr, frame_size,
 			DMA_FROM_DEVICE);
@@ -637,7 +691,7 @@ static irqreturn_t handle_interrupt(struct b3dfg_dev *fgdev)
 				printk("ERROR mismatch, next_trf %d vs cur_dma_frame_idx %d\n",
 					next_trf, fgdev->cur_dma_frame_idx);
 				/* FIXME this is where we should handle dropped triplets */
-				goto out;
+				goto out_unlock;
 			}
 			setup_frame_transfer(fgdev, buf, next_trf, 1);
 			need_ack = 0;
@@ -648,6 +702,8 @@ static irqreturn_t handle_interrupt(struct b3dfg_dev *fgdev)
 		fgdev->cur_dma_frame_idx = -1;
 	}
 
+out_unlock:
+	spin_unlock(&fgdev->buffer_lock);
 out:
 	if (need_ack) {
 		printk("acknowledging interrupt\n");
@@ -679,6 +735,8 @@ static int b3dfg_release(struct inode *inode, struct file *filp)
 	struct b3dfg_dev *fgdev = filp->private_data;
 	printk(KERN_INFO PFX "release\n");
 	set_transmission(fgdev, 0);
+
+	/* no buffer locking needed, this is serialized */
 	dequeue_all_buffers(fgdev);
 	return set_num_buffers(fgdev, 0);
 }
@@ -708,7 +766,9 @@ static long b3dfg_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 static unsigned int b3dfg_poll(struct file *filp, poll_table *poll_table)
 {
 	struct b3dfg_dev *fgdev = filp->private_data;
+	unsigned long flags;
 	int i;
+	int r = 0;
 
 	if (unlikely(!fgdev->transmission_enabled)) {
 		printk(KERN_ERR PFX "cannot poll() when transmission is disabled\n");
@@ -716,12 +776,17 @@ static unsigned int b3dfg_poll(struct file *filp, poll_table *poll_table)
 	}
 
 	poll_wait(filp, &fgdev->buffer_waitqueue, poll_table);
+	spin_lock_irqsave(&fgdev->buffer_lock, flags);
 	for (i = 0; i < fgdev->num_buffers; i++) {
-		if (fgdev->buffers[i].state == B3DFG_BUFFER_POPULATED)
-			return POLLIN | POLLRDNORM;
+		if (fgdev->buffers[i].state == B3DFG_BUFFER_POPULATED) {
+			r = POLLIN | POLLRDNORM;
+			goto out;
+		}
 	}
 
-	return 0;
+out:
+	spin_unlock_irqrestore(&fgdev->buffer_lock, flags);
+	return r;
 }
 
 static int b3dfg_mmap(struct file *filp, struct vm_area_struct *vma)
@@ -729,11 +794,19 @@ static int b3dfg_mmap(struct file *filp, struct vm_area_struct *vma)
 	struct b3dfg_dev *fgdev = filp->private_data;
 	unsigned long offset = vma->vm_pgoff << PAGE_SHIFT;
 	unsigned long vsize = vma->vm_end - vma->vm_start;
-	unsigned long bufdatalen = fgdev->num_buffers * fgdev->frame_size * 3;
-	unsigned long psize = bufdatalen - offset;
+	unsigned long bufdatalen;
+	unsigned long psize;
+	unsigned long flags;
 
-	if (fgdev->num_buffers == 0)
+	spin_lock_irqsave(&fgdev->buffer_lock, flags);
+	bufdatalen = fgdev->num_buffers * fgdev->frame_size * 3;
+	psize = bufdatalen - offset;
+
+	if (fgdev->num_buffers == 0) {
+		spin_unlock_irqrestore(&fgdev->buffer_lock, flags);
 		return -ENOENT;
+	}
+	spin_unlock_irqrestore(&fgdev->buffer_lock, flags);
 	if (vsize > psize)
 		return -EINVAL;
 
@@ -760,6 +833,7 @@ static void b3dfg_init_dev(struct b3dfg_dev *fgdev)
 	fgdev->frame_size = frm_size * 4096;
 	INIT_LIST_HEAD(&fgdev->buffer_queue);
 	init_waitqueue_head(&fgdev->buffer_waitqueue);
+	spin_lock_init(&fgdev->buffer_lock);
 }
 
 /* find next free minor number, returns -1 if none are availabile */
