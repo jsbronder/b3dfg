@@ -35,6 +35,7 @@
 #include <linux/mm.h>
 #include <linux/version.h>
 
+#include <asm/atomic.h>
 #include <asm/uaccess.h>
 
 /* TODO:
@@ -124,7 +125,7 @@ struct b3dfg_dev {
 
 	wait_queue_head_t buffer_waitqueue;
 
-	int mapping_count;
+	atomic_t mapping_count;
 
 	int cur_dma_frame_idx;
 	dma_addr_t cur_dma_frame_addr;
@@ -261,7 +262,7 @@ static int set_num_buffers(struct b3dfg_dev *fgdev, int num_buffers)
 		return -EBUSY;
 	}
 
-	if (fgdev->mapping_count > 0) {
+	if (atomic_read(&fgdev->mapping_count) > 0) {
 		printk(KERN_ERR PFX
 			"cannot set buffer count while memory mappings are active\n");
 		return -EBUSY;
@@ -431,13 +432,13 @@ out:
 static void b3dfg_vma_open(struct vm_area_struct *vma)
 {
 	struct b3dfg_dev *fgdev = vma->vm_file->private_data;
-	fgdev->mapping_count++;
+	atomic_inc(&fgdev->mapping_count);
 }
 
 static void b3dfg_vma_close(struct vm_area_struct *vma)
 {
 	struct b3dfg_dev *fgdev = vma->vm_file->private_data;
-	fgdev->mapping_count--;
+	atomic_dec(&fgdev->mapping_count);
 }
 
 #if LINUX_VERSION_CODE > KERNEL_VERSION(2,6,22)
@@ -834,6 +835,7 @@ static void b3dfg_init_dev(struct b3dfg_dev *fgdev)
 	INIT_LIST_HEAD(&fgdev->buffer_queue);
 	init_waitqueue_head(&fgdev->buffer_waitqueue);
 	spin_lock_init(&fgdev->buffer_lock);
+	atomic_set(&fgdev->mapping_count, 0);
 }
 
 /* find next free minor number, returns -1 if none are availabile */
