@@ -117,6 +117,9 @@ struct b3dfg_dev {
 	void __iomem *regs;
 	unsigned int frame_size;
 
+	/* we want to serialize some ioctl operations */
+	struct mutex ioctl_mutex;
+
 	/* buffers_lock protects num_buffers, buffers, buffer_queue */
 	spinlock_t buffer_lock;
 	int num_buffers;
@@ -252,8 +255,6 @@ static int set_num_buffers(struct b3dfg_dev *fgdev, int num_buffers)
 	int r;
 	struct b3dfg_buffer *buffers;
 	unsigned long flags;
-
-	/* FIXME: protect against TX enable while still allocating buffers */
 
 	printk(KERN_INFO PFX "set %d buffers\n", num_buffers);
 	if (fgdev->transmission_enabled) {
@@ -745,13 +746,21 @@ static int b3dfg_release(struct inode *inode, struct file *filp)
 static long b3dfg_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 {
 	struct b3dfg_dev *fgdev = filp->private_data;
+	int r;
+
 	switch (cmd) {
 	case B3DFG_IOCGFRMSZ:
 		return __put_user(fgdev->frame_size, (int __user *) arg);
 	case B3DFG_IOCTNUMBUFS:
-		return set_num_buffers(fgdev, (int) arg);
+		mutex_lock(&fgdev->ioctl_mutex);
+		r = set_num_buffers(fgdev, (int) arg);
+		mutex_unlock(&fgdev->ioctl_mutex);
+		return r;
 	case B3DFG_IOCTTRANS:
-		return set_transmission(fgdev, (int) arg);
+		mutex_lock(&fgdev->ioctl_mutex);
+		r = set_transmission(fgdev, (int) arg);
+		mutex_unlock(&fgdev->ioctl_mutex);
+		return r;
 	case B3DFG_IOCTQUEUEBUF:
 		return queue_buffer(fgdev, (int) arg);
 	case B3DFG_IOCQPOLLBUF:
@@ -836,6 +845,7 @@ static void b3dfg_init_dev(struct b3dfg_dev *fgdev)
 	init_waitqueue_head(&fgdev->buffer_waitqueue);
 	spin_lock_init(&fgdev->buffer_lock);
 	atomic_set(&fgdev->mapping_count, 0);
+	mutex_init(&fgdev->ioctl_mutex);
 }
 
 /* find next free minor number, returns -1 if none are availabile */
