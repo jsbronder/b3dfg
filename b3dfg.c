@@ -780,9 +780,13 @@ static unsigned int b3dfg_poll(struct file *filp, poll_table *poll_table)
 	int i;
 	int r = 0;
 
+	/* don't let the user mess with buffer allocations etc. while polling */
+	mutex_lock(&fgdev->ioctl_mutex);
+
 	if (unlikely(!fgdev->transmission_enabled)) {
 		printk(KERN_ERR PFX "cannot poll() when transmission is disabled\n");
-		return POLLERR;
+		r = POLLERR;
+		goto out;
 	}
 
 	poll_wait(filp, &fgdev->buffer_waitqueue, poll_table);
@@ -790,12 +794,14 @@ static unsigned int b3dfg_poll(struct file *filp, poll_table *poll_table)
 	for (i = 0; i < fgdev->num_buffers; i++) {
 		if (fgdev->buffers[i].state == B3DFG_BUFFER_POPULATED) {
 			r = POLLIN | POLLRDNORM;
-			goto out;
+			goto out_buffer_unlock;
 		}
 	}
 
-out:
+out_buffer_unlock:
 	spin_unlock_irqrestore(&fgdev->buffer_lock, flags);
+out:
+	mutex_unlock(&fgdev->ioctl_mutex);
 	return r;
 }
 
@@ -807,6 +813,10 @@ static int b3dfg_mmap(struct file *filp, struct vm_area_struct *vma)
 	unsigned long bufdatalen;
 	unsigned long psize;
 	unsigned long flags;
+	int r = 0;
+
+	/* don't let user mess with buffer allocations during mmap */
+	mutex_lock(&fgdev->ioctl_mutex);
 
 	spin_lock_irqsave(&fgdev->buffer_lock, flags);
 	bufdatalen = fgdev->num_buffers * fgdev->frame_size * 3;
@@ -814,16 +824,22 @@ static int b3dfg_mmap(struct file *filp, struct vm_area_struct *vma)
 
 	if (fgdev->num_buffers == 0) {
 		spin_unlock_irqrestore(&fgdev->buffer_lock, flags);
-		return -ENOENT;
+		r = -ENOENT;
+		goto out;
 	}
 	spin_unlock_irqrestore(&fgdev->buffer_lock, flags);
-	if (vsize > psize)
-		return -EINVAL;
+	if (vsize > psize) {
+		r = -EINVAL;
+		goto out;
+	}
 
 	vma->vm_flags |= VM_IO | VM_RESERVED | VM_CAN_NONLINEAR;
 	vma->vm_ops = &b3dfg_vm_ops;
 	b3dfg_vma_open(vma);
-	return 0;
+
+out:
+	mutex_unlock(&fgdev->ioctl_mutex);
+	return r;
 }
 
 static struct file_operations b3dfg_fops = {
