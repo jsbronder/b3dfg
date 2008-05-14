@@ -34,6 +34,7 @@
 #include <linux/wait.h>
 #include <linux/mm.h>
 #include <linux/version.h>
+#include <linux/mutex.h>
 
 #include <asm/atomic.h>
 #include <asm/uaccess.h>
