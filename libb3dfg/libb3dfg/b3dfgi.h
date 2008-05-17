@@ -11,13 +11,18 @@
 #define __B3DFGI_H___
 #include <sys/ioctl.h>
 
+struct b3dfg_poll {
+	int buffer_idx;
+	unsigned int triplets_dropped;
+};
+
 #define B3DFG_IOC_MAGIC         0xb3 /* dfg :-) */
 #define B3DFG_IOCGFRMSZ         _IOR(B3DFG_IOC_MAGIC, 1, int)
 #define B3DFG_IOCTNUMBUFS       _IO(B3DFG_IOC_MAGIC, 2)
 #define B3DFG_IOCTTRANS         _IO(B3DFG_IOC_MAGIC, 3)
 #define B3DFG_IOCTQUEUEBUF      _IO(B3DFG_IOC_MAGIC, 4)
-#define B3DFG_IOCQPOLLBUF       _IO(B3DFG_IOC_MAGIC, 5)
-#define B3DFG_IOCQWAITBUF       _IO(B3DFG_IOC_MAGIC, 6)
+#define B3DFG_IOCTPOLLBUF       _IOWR(B3DFG_IOC_MAGIC, 5, struct b3dfg_poll)
+#define B3DFG_IOCTWAITBUF       _IOWR(B3DFG_IOC_MAGIC, 6, struct b3dfg_poll)
 
 #define FRAMES_PER_BUFFER 3
 

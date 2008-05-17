@@ -67,8 +67,8 @@
 #define B3DFG_IOCTNUMBUFS		_IO(B3DFG_IOC_MAGIC, 2)
 #define B3DFG_IOCTTRANS			_IO(B3DFG_IOC_MAGIC, 3)
 #define B3DFG_IOCTQUEUEBUF		_IO(B3DFG_IOC_MAGIC, 4)
-#define B3DFG_IOCQPOLLBUF		_IO(B3DFG_IOC_MAGIC, 5)
-#define B3DFG_IOCQWAITBUF		_IO(B3DFG_IOC_MAGIC, 6)
+#define B3DFG_IOCTPOLLBUF		_IOWR(B3DFG_IOC_MAGIC, 5, struct b3dfg_poll)
+#define B3DFG_IOCTWAITBUF		_IOWR(B3DFG_IOC_MAGIC, 6, struct b3dfg_poll)
 
 enum {
 	/* number of 4kb pages per frame */
@@ -137,6 +137,9 @@ struct b3dfg_dev {
 
 	atomic_t mapping_count;
 
+	spinlock_t triplets_dropped_lock;
+	unsigned int triplets_dropped;
+
 	int cur_dma_frame_idx;
 	dma_addr_t cur_dma_frame_addr;
 
@@ -154,6 +157,13 @@ static dev_t b3dfg_devt;
 static const struct pci_device_id b3dfg_ids[] __devinitdata = {
 	{ PCI_DEVICE(0x1901, 0x0001) },
 	{ },
+};
+
+/***** user-visible types *****/
+
+struct b3dfg_poll {
+	int buffer_idx;
+	unsigned int triplets_dropped;
 };
 
 /**** register I/O ****/
@@ -329,11 +339,15 @@ out:
 
 /* non-blocking buffer poll. returns 1 if data is present in the buffer,
  * 0 otherwise */
-static int poll_buffer(struct b3dfg_dev *fgdev, int bufidx)
+static int poll_buffer(struct b3dfg_dev *fgdev, void __user *arg)
 {
+	struct b3dfg_poll p;
 	struct b3dfg_buffer *buf;
 	unsigned long flags;
 	int r = 1;
+
+	if (copy_from_user(&p, arg, sizeof(p)))
+		return -EFAULT;
 
 	if (unlikely(!fgdev->transmission_enabled)) {
 		printk(KERN_ERR PFX
@@ -342,7 +356,7 @@ static int poll_buffer(struct b3dfg_dev *fgdev, int bufidx)
 	}
 
 	spin_lock_irqsave(&fgdev->buffer_lock, flags);
-	buf = buffer_from_idx(fgdev, bufidx);
+	buf = buffer_from_idx(fgdev, p.buffer_idx);
 	if (unlikely(!buf)) {
 		r = -ENOENT;
 		goto out;
@@ -353,8 +367,15 @@ static int poll_buffer(struct b3dfg_dev *fgdev, int bufidx)
 		goto out;
 	}
 
-	if (likely(buf->state == B3DFG_BUFFER_POPULATED))
+	if (likely(buf->state == B3DFG_BUFFER_POPULATED)) {
 		buf->state = B3DFG_BUFFER_POLLED;
+		spin_lock(&fgdev->triplets_dropped_lock);
+		p.triplets_dropped = fgdev->triplets_dropped;
+		fgdev->triplets_dropped = 0;
+		spin_unlock(&fgdev->triplets_dropped_lock);
+		if (copy_to_user(arg, &p, sizeof(p)))
+			r = -EFAULT;
+	}
 
 out:
 	spin_unlock_irqrestore(&fgdev->buffer_lock, flags);
@@ -373,11 +394,15 @@ static u8 buffer_state(struct b3dfg_dev *fgdev, struct b3dfg_buffer *buf)
 }
 
 /* sleep until a specific buffer becomes populated */
-static int wait_buffer(struct b3dfg_dev *fgdev, int bufidx)
+static int wait_buffer(struct b3dfg_dev *fgdev, void __user *arg)
 {
+	struct b3dfg_poll p;
 	struct b3dfg_buffer *buf;
 	unsigned long flags;
 	int r;
+
+	if (copy_from_user(&p, arg, sizeof(p)))
+		return -EFAULT;
 
 	if (unlikely(!fgdev->transmission_enabled)) {
 		printk(KERN_ERR PFX
@@ -386,7 +411,7 @@ static int wait_buffer(struct b3dfg_dev *fgdev, int bufidx)
 	}
 
 	spin_lock_irqsave(&fgdev->buffer_lock, flags);
-	buf = buffer_from_idx(fgdev, bufidx);
+	buf = buffer_from_idx(fgdev, p.buffer_idx);
 	if (unlikely(!buf)) {
 		r = -ENOENT;
 		goto out;
@@ -394,7 +419,7 @@ static int wait_buffer(struct b3dfg_dev *fgdev, int bufidx)
 
 	if (buf->state == B3DFG_BUFFER_STATUS_POPULATED) {
 		r = 0;
-		goto out;
+		goto out_triplets_dropped;
 	}
 
 	spin_unlock_irqrestore(&fgdev->buffer_lock, flags);
@@ -405,10 +430,17 @@ static int wait_buffer(struct b3dfg_dev *fgdev, int bufidx)
 		return -ERESTARTSYS;
 
 	spin_lock_irqsave(&fgdev->buffer_lock, flags);
-	/* FIXME: relocate buffer? it might have changed during the unlocked
+	/* FIXME: rediscover buffer? it might have changed during the unlocked
 	 * time */
 	buf->state = B3DFG_BUFFER_POLLED;
 
+out_triplets_dropped:
+	spin_lock(&fgdev->triplets_dropped_lock);
+	p.triplets_dropped = fgdev->triplets_dropped;
+	fgdev->triplets_dropped = 0;
+	spin_unlock(&fgdev->triplets_dropped_lock);
+	if (copy_to_user(arg, &p, sizeof(p)))
+		r = -EFAULT;
 out:
 	spin_unlock_irqrestore(&fgdev->buffer_lock, flags);
 	return r;
@@ -505,6 +537,10 @@ static int enable_transmission(struct b3dfg_dev *fgdev)
 		fgdev->discard_frame_start = 0;
 	}
 
+	spin_lock_irqsave(&fgdev->triplets_dropped_lock, flags);
+	fgdev->triplets_dropped = 0;
+	spin_unlock_irqrestore(&fgdev->triplets_dropped_lock, flags);
+
 	fgdev->triplet_ready = 0;
 	fgdev->transmission_enabled = 1;
 	fgdev->cur_dma_frame_idx = -1;
@@ -551,6 +587,7 @@ static irqreturn_t b3dfg_intr(int irq, void *dev_id)
 	struct b3dfg_buffer *buf = NULL;
 	unsigned int frame_size;
 	u32 sts;
+	u8 dropped;
 	int next_trf;
 	int need_ack = 1;
 
@@ -567,8 +604,14 @@ static irqreturn_t b3dfg_intr(int irq, void *dev_id)
 		goto out;
 	}
 
-	/* acknowledge interrupt */
-	dbg(KERN_INFO PFX "got intr, brontes DMASTS=%08x (dropped=%d comp=%d next_trf=%d)\n", sts, (sts >> 8) & 0xff, !!(sts & 0x4), sts & 0x3);
+	dropped = (sts >> 8) & 0xff;
+	dbg(KERN_INFO PFX "got intr, brontes DMASTS=%08x (dropped=%d comp=%d next_trf=%d)\n", sts, dropped, !!(sts & 0x4), sts & 0x3);
+
+	if (unlikely(dropped > 0)) {
+		spin_lock(&fgdev->triplets_dropped_lock);
+		fgdev->triplets_dropped += dropped;
+		spin_unlock(&fgdev->triplets_dropped_lock);
+	}
 
 	dev = &fgdev->pdev->dev;
 	frame_size = fgdev->frame_size;
@@ -695,10 +738,10 @@ static long b3dfg_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		return r;
 	case B3DFG_IOCTQUEUEBUF:
 		return queue_buffer(fgdev, (int) arg);
-	case B3DFG_IOCQPOLLBUF:
-		return poll_buffer(fgdev, (int) arg);
-	case B3DFG_IOCQWAITBUF:
-		return wait_buffer(fgdev, (int) arg);
+	case B3DFG_IOCTPOLLBUF:
+		return poll_buffer(fgdev, (void __user *) arg);
+	case B3DFG_IOCTWAITBUF:
+		return wait_buffer(fgdev, (void __user *) arg);
 	default:
 		printk(KERN_ERR PFX "unrecognised ioctl %x\n", cmd);
 		return -EINVAL;
@@ -807,6 +850,7 @@ static int b3dfg_init_dev(struct b3dfg_dev *fgdev)
 	INIT_LIST_HEAD(&fgdev->buffer_queue);
 	init_waitqueue_head(&fgdev->buffer_waitqueue);
 	spin_lock_init(&fgdev->buffer_lock);
+	spin_lock_init(&fgdev->triplets_dropped_lock);
 	atomic_set(&fgdev->mapping_count, 0);
 	mutex_init(&fgdev->ioctl_mutex);
 	return 0;

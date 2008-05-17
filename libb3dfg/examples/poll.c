@@ -13,7 +13,7 @@
 
 #include <libb3dfg/b3dfg.h>
 
-#define NUM_BUFFERS 8
+#define NUM_BUFFERS 4
 
 static b3dfg_dev *dev;
 static unsigned char *mapping;
@@ -49,6 +49,7 @@ int main(void)
 	struct pollfd pfd = { .events = POLLIN };
 	int next_buf = 0;
 	int nodata = 0;
+	unsigned int dropped;
 
 	dev = b3dfg_open(0);
 	if (!dev) {
@@ -98,7 +99,7 @@ int main(void)
 			}
 			continue;
 		}
-		r = b3dfg_poll_buffer(dev, next_buf);
+		r = b3dfg_poll_buffer(dev, next_buf, &dropped);
 		if (r < 0) {
 			fprintf(stderr, "poll failed error %d\n", r);
 			break;
@@ -106,6 +107,9 @@ int main(void)
 		if (r == 0) {
 			fprintf(stderr, "buffer %d not ready after poll()?\n", next_buf);
 			break;
+		}
+		if (dropped > 0) {
+			printf("%d frame(s) dropped\n", dropped);
 		}
 		write_to_file(next_buf);
 		r = b3dfg_queue_buffer(dev, next_buf);

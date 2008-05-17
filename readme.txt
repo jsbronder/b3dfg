@@ -146,13 +146,6 @@ on 2.6.18 because:
 Possible todo items:
 (I've tried to rank these in decreasing order of importance)
 
-Expose the number of dropped triplets. Probably best to return this in the
-poll_buffer or wait_buffer ioctls, but I haven't decided if that's the best
-approach. The driver must also be careful not to throw away any information
-at the other points when it reads the DMA_STS register (the dropped counter
-is reset on read). See the expose-dropped-frames branch for an attempted
-implementation of this (it crashes). libb3dfg also needs to expose this.
-
 Cable status interrupt implementation. The design docs were recently updated
 to include a mechanism for detecting when the wand is connected and
 disconnected, but this functionality is not yet implemented in the driver. I
@@ -175,6 +168,12 @@ given a timeout. We should add an optional timeout to the wait_buffer ioctl.
 Locking review. We won't be using threads or anything initially, but the
 driver should be as close to usual kernel quality as possible - if two ioctls
 can run at the same time and would cause a race, that should be prevented.
+
+Frame fill times. Are we interested in knowing the exact time when each
+image arrived in each buffer? We certainly were in the old system, but that
+was because we required that information to synchronize the frames from the
+3 cameras. Now they are always synchronized, but do we want this functionality
+anyway?
 
 TRP_DROPPED overflow. The accuracy of TRP_DROPPED is likely not of huge
 importance to the software - if we've dropped frames we're in trouble, but

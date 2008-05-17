@@ -193,6 +193,21 @@
  * buffer transfers control to the hardware until you poll it and observe
  * that data has been captured.
  *
+ * \section dropped Tracking dropped frames
+ *
+ * If the software does not queue buffers quickly enough, there is a chance
+ * that the kernel will not be able to present any memory to the frame grabber,
+ * in which case the frame grabber is forced to discard a set of 3 frames.
+ * The frame grabber counts how many frame sets have been dropped and this
+ * information can be passed on to you through the <tt>dropped</tt> output
+ * parameter of the b3dfg_wait_buffer() and b3dfg_poll_buffer() functions.
+ *
+ * The dropped parameter is optional, you can pass NULL if you don't care.
+ * However, if you do want to track dropped frames, you must pass an output
+ * location <em>every time</em>. You are only informed about each dropped
+ * frame triplet once, and if the library does receive information that
+ * frames have been dropped but cannot pass it on, then that information will
+ * be lost (it does not accumulate).
  */
 
 /** @defgroup core Core operations */
@@ -394,18 +409,24 @@ API_EXPORTED int b3dfg_queue_buffer(b3dfg_dev *dev, int buffer)
  * 
  * \param dev a device handle
  * \param buffer the buffer to poll
+ * \param dropped output location for number of dropped triplets (optional, can
+ * be NULL)
  * \returns 1 if the buffer was populated (and is now polled)
  * \returns 0 otherwise
  * \returns negative on error
  */
-API_EXPORTED int b3dfg_poll_buffer(b3dfg_dev *dev, int buffer)
+API_EXPORTED int b3dfg_poll_buffer(b3dfg_dev *dev, int buffer,
+	unsigned int *dropped)
 {
 	int r;
+	struct b3dfg_poll p = { .buffer_idx = buffer };
 
 	b3dfg_dbg("buffer %d", buffer);
-	r = ioctl(dev->fd, B3DFG_IOCQPOLLBUF, buffer);
+	r = ioctl(dev->fd, B3DFG_IOCTPOLLBUF, &p);
 	if (r < 0)
-		b3dfg_err("IOCQPOLLBUF(%d) failed r=%d errno=%d", buffer, r, errno);
+		b3dfg_err("IOCTPOLLBUF(%d) failed r=%d errno=%d", buffer, r, errno);
+	else if (dropped)
+		*dropped = p.triplets_dropped;
 	return r;
 }
 
@@ -427,18 +448,24 @@ API_EXPORTED int b3dfg_poll_buffer(b3dfg_dev *dev, int buffer)
  *
  * \param dev a device handle
  * \param buffer the buffer to wait upon
+ * \param dropped output location for number of dropped triplets (optional, can
+ * be NULL)
  * \returns 0 on success (buffer now contains data and has been moved to
  * polled state)
  * \returns non-zero on error
  */
-API_EXPORTED int b3dfg_wait_buffer(b3dfg_dev *dev, int buffer)
+API_EXPORTED int b3dfg_wait_buffer(b3dfg_dev *dev, int buffer,
+	unsigned int *dropped)
 {
+	struct b3dfg_poll p = { .buffer_idx = buffer };
 	int r;
 
 	b3dfg_dbg("buffer %d", buffer);
-	r = ioctl(dev->fd, B3DFG_IOCQWAITBUF, buffer);
+	r = ioctl(dev->fd, B3DFG_IOCTWAITBUF, &p);
 	if (r < 0)
 		b3dfg_err("IOCQWAITBUF(%d) failed r=%d errno=%d", buffer, r, errno);
+	else if (dropped)
+		*dropped = p.triplets_dropped;
 	return r;
 }
 
