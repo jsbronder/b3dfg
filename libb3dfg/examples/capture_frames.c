@@ -88,7 +88,8 @@ int main(void)
 
 	r = 0;
 out:
-	b3dfg_unmap_buffers(dev);
+	if (dev)
+		b3dfg_unmap_buffers(dev);
 	b3dfg_close(dev);
 	return r;
 }
