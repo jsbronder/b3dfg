@@ -13,7 +13,7 @@
 
 #include <libb3dfg/b3dfg.h>
 
-#define NUM_BUFFERS 1
+#define NUM_BUFFERS 8
 
 static b3dfg_dev *dev;
 static unsigned char *mapping;
@@ -48,6 +48,7 @@ int main(void)
 	int r = 1;
 	struct pollfd pfd = { .events = POLLIN };
 	int next_buf = 0;
+	int nodata = 0;
 
 	dev = b3dfg_open(0);
 	if (!dev) {
@@ -91,6 +92,10 @@ int main(void)
 		}
 		if (!(pfd.revents & POLLIN)) {
 			printf("poll returned with no data?\n");
+			if (++nodata == 3) {
+				printf("aborting\n");
+				break;
+			}
 			continue;
 		}
 		r = b3dfg_poll_buffer(dev, next_buf);
@@ -108,6 +113,7 @@ int main(void)
 			fprintf(stderr, "buffer requeue failed %d\n", r);
 			break;
 		}
+		nodata = 0;
 		next_buf++;
 		if (next_buf >= NUM_BUFFERS)
 			next_buf = 0;
