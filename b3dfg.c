@@ -46,6 +46,12 @@
  * review endianness
  */
 
+#ifdef DEBUG
+#define dbg(msg...) printk(msg)
+#else
+#define dbg(msg...)
+#endif
+
 /* pre-2.6.23-compat */
 #ifndef VM_CAN_NONLINEAR
 #define VM_CAN_NONLINEAR 0
@@ -332,7 +338,7 @@ static int queue_buffer(struct b3dfg_dev *fgdev, int bufidx)
 	list_add_tail(&buf->list, &fgdev->buffer_queue);
 
 	if (fgdev->transmission_enabled && fgdev->triplet_ready) {
-		printk("triplet is ready, so pushing immediately\n");
+		dbg("triplet is ready, so pushing immediately\n");
 		fgdev->triplet_ready = 0;
 		setup_frame_transfer(fgdev, buf, fgdev->discard_frame_start, 0);
 	}
@@ -581,7 +587,7 @@ static void disable_transmission(struct b3dfg_dev *fgdev)
 	/* reset dropped triplet counter */
 	/* FIXME will this throw away useful dma data too? */
 	tmp = b3dfg_read32(fgdev, B3D_REG_DMA_STS);
-	printk("brontes DMA_STS reads %x after TX stopped\n", tmp);
+	dbg("brontes DMA_STS reads %x after TX stopped\n", tmp);
 
 	spin_lock_irqsave(&fgdev->buffer_lock, flags);
 	dequeue_all_buffers(fgdev);
@@ -633,7 +639,7 @@ static irqreturn_t handle_interrupt(struct b3dfg_dev *fgdev)
 	}
 
 	/* acknowledge interrupt */
-	printk(KERN_INFO PFX "got intr, brontes DMASTS=%08x (dropped=%d comp=%d next_trf=%d)\n", sts, (sts >> 8) & 0xff, !!(sts & 0x4), sts & 0x3);
+	dbg(KERN_INFO PFX "got intr, brontes DMASTS=%08x (dropped=%d comp=%d next_trf=%d)\n", sts, (sts >> 8) & 0xff, !!(sts & 0x4), sts & 0x3);
 
 	dev = &fgdev->pdev->dev;
 	frame_size = fgdev->frame_size;
@@ -641,7 +647,7 @@ static irqreturn_t handle_interrupt(struct b3dfg_dev *fgdev)
 	spin_lock(&fgdev->buffer_lock);
 	if (unlikely(list_empty(&fgdev->buffer_queue))) {
 		/* FIXME need more sanity checking here */
-		printk("driver has no buffer ready --> cannot program any more transfers\n");
+		dbg("driver has no buffer ready --> cannot program any more transfers\n");
 		fgdev->triplet_ready = 1;
 		goto out_unlock;
 	}
@@ -653,7 +659,7 @@ static irqreturn_t handle_interrupt(struct b3dfg_dev *fgdev)
 
 		tmp = b3dfg_read32(fgdev, B3D_REG_EC220_DMA_STS);
 		/* last DMA completed */
-		printk("DMA_COMP detected, ec220 dmasts = %08x\n", tmp);
+		dbg("DMA_COMP detected, ec220 dmasts = %08x\n", tmp);
 		if (unlikely(fgdev->cur_dma_frame_idx == -1)) {
 			printk("ERROR completed but no last idx?\n");
 			/* FIXME flesh out error handling */
@@ -664,10 +670,10 @@ static irqreturn_t handle_interrupt(struct b3dfg_dev *fgdev)
 
 		buf = list_entry(fgdev->buffer_queue.next, struct b3dfg_buffer, list);
 		if (likely(buf)) {
-			printk("handle frame completion\n");
+			dbg("handle frame completion\n");
 			if (fgdev->cur_dma_frame_idx == B3DFG_FRAMES_PER_BUFFER - 1) {
 				/* last frame of that triplet completed */
-				printk("triplet completed\n");
+				dbg("triplet completed\n");
 
 				if (fgdev->discard_frame_start) {
 					fgdev->discard_frame_start = 0;
@@ -687,7 +693,7 @@ static irqreturn_t handle_interrupt(struct b3dfg_dev *fgdev)
 		next_trf--;
 
 		buf = list_entry(fgdev->buffer_queue.next, struct b3dfg_buffer, list);
-		printk("program DMA transfer for frame %d\n", next_trf + 1);
+		dbg("program DMA transfer for frame %d\n", next_trf + 1);
 		if (likely(buf)) {
 			if (!fgdev->discard_frame_start &&
 					next_trf != fgdev->cur_dma_frame_idx + 1) {
@@ -709,7 +715,7 @@ out_unlock:
 	spin_unlock(&fgdev->buffer_lock);
 out:
 	if (need_ack) {
-		printk("acknowledging interrupt\n");
+		dbg("acknowledging interrupt\n");
 		b3dfg_write32(fgdev, B3D_REG_EC220_DMA_STS, 0x0b);
 	}
 	if (unhandled)

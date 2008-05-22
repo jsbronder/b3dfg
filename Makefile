@@ -4,6 +4,9 @@ module := b3dfg
 .PHONY: module clean
 
 module:
+	B3DFG_DEBUG=y make -C $(KERNELDIR) M=`pwd`
+
+nodebug:
 	make -C $(KERNELDIR) M=`pwd`
 
 clean:
