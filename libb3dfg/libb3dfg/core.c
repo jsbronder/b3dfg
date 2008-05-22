@@ -29,9 +29,9 @@
  * The interface is deliberately modelled to be similar to the
  * libdc1394/video1394 interface used on previous versions of the product.
  *
- * A general introduction to this library is shown below. Be sure to check
- * the full API documentation for further details and some other
- * functionality.
+ * This page provides a general introduction to the library. For specific
+ * details on the API, be sure to consult the rest of this documentation.
+ * Click the 'Modules' tab at the top of this page.
  *
  * \section libinit Library initialization
  *
