@@ -717,7 +717,11 @@ out:
 	return IRQ_HANDLED;
 }
 
+#if LINUX_VERSION_CODE > KERNEL_VERSION(2,6,18)
 static irqreturn_t b3dfg_intr(int irq, void *dev_id)
+#else
+static irqreturn_t b3dfg_intr(int irq, void *dev_id, struct pt_regs *regs)
+#endif
 {
 	struct b3dfg_dev *fgdev = dev_id;
 	return handle_interrupt(fgdev);
