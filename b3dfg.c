@@ -540,8 +540,10 @@ static int enable_transmission(struct b3dfg_dev *fgdev)
 	/* check we're a bus master */
 	pci_read_config_word(fgdev->pdev, PCI_COMMAND, &command);
 	if (!(command & PCI_COMMAND_MASTER)) {
-		printk(KERN_ERR PFX "cannot transmit; am not a bus master\n");
-		return -EIO;
+		printk(KERN_ERR PFX "not a bus master, force-enabling\n");
+		/* FIXME: why did we lose it in the first place? */
+		pci_write_config_word(fgdev->pdev, PCI_COMMAND,
+			command | PCI_COMMAND_MASTER);
 	}
 
 	spin_lock_irqsave(&fgdev->buffer_lock, flags);
