@@ -661,7 +661,11 @@ static irqreturn_t handle_interrupt(struct b3dfg_dev *fgdev)
 
 		tmp = b3dfg_read32(fgdev, B3D_REG_EC220_DMA_STS);
 		/* last DMA completed */
-		dbg("DMA_COMP detected, ec220 dmasts = %08x\n", tmp);
+		if (unlikely(tmp & 0x1)) {
+			printk(KERN_ERR PFX "EC220 reports error (%08x)\n", tmp);
+			/* FIXME flesh out error handling */
+			goto out_unlock;
+		}
 		if (unlikely(fgdev->cur_dma_frame_idx == -1)) {
 			printk("ERROR completed but no last idx?\n");
 			/* FIXME flesh out error handling */
