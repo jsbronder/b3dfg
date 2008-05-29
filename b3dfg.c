@@ -289,6 +289,9 @@ static int set_num_buffers(struct b3dfg_dev *fgdev, int num_buffers)
 	/* must unlock to allocate GFP_KERNEL memory */
 	spin_unlock_irqrestore(&fgdev->buffer_lock, flags);
 
+	if (num_buffers == 0)
+		return 0;
+
 	buffers = kmalloc(num_buffers * sizeof(struct b3dfg_buffer),
 		GFP_KERNEL);
 	if (!buffers)
