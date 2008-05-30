@@ -175,6 +175,7 @@ BAR0 will contain the following 32-bit registers:
 0x00 & FRM\_SIZE & Frame size & 192 & RO \\ \hline
 0x04 & HW\_CTRL & Hardware control & 0 & R/W \\ \hline
 0x08 & DMA\_STS & DMA status & 0 & RO \\ \hline
+0x80 & WAND\_STS & Wand status & 0 & RO \\ \hline
 \end{tabular}
 
 The registers at address 0x8000 upwards map to the EC220 DMA control registers
@@ -207,13 +208,22 @@ This register contains the size of a frame, expressed in terms of 4kb pages. The
 \item[Size] 32 bits
 \end{description}
 
-This flags register controls behaviour of the device.\footnote{Currently, interrupts are only generated for frame transmission, so we technically only require a single bit for both of these flags. However, it is likely that in the future we will accept interrupts for events other than frame transmission, so a separate bit has been created.}
+This flags register controls behaviour of the device.
 
-\begin{tabular}{|c|c|c|c|}\hline
-\textbf{Bit} & \textbf{Mnemonic} & \textbf{Name} & \textbf{Description} \\ \hline
-0 & INT\_CTRL & Interrupt control & Set to enable interrupt generation. \\ \hline
-1:31 & \multicolumn{3}{|c|}{Reserved} \\ \hline
+\begin{tabular}{|c|c|c|}\hline
+\textbf{Bit} & \textbf{Mnemonic} & \textbf{Description} \\ \hline
+0 & FRM\_INT\_CTRL & Frame interrupt control \\ \hline
+1 & CBL\_INT\_CTRL & Cable status interrupt control \\ \hline
+2:31 & \multicolumn{2}{|c|}{Reserved} \\ \hline
 \end{tabular}
+
+\paragraph{FRM\_INT\_CTRL}
+
+Set this bit to enable interrupt generation for frame transmission events. 
+
+\paragraph{CBL\_INT\_CTRL}
+
+Set this bit to enable interrupt generation for cable connection/disconnection events.
 
 \subsubsection{DMA\_STS}
 
@@ -232,7 +242,8 @@ The contents of this register are reset to 0 when read by the driver.
 \textbf{Bit} & \textbf{Mnemonic} & \textbf{Description} \\ \hline
 0:1 & NEXT\_TRF & One-based ID of next frame to be transferred. 0 = no frame pending \\ \hline
 2 & DMA\_COMP & Completion of DMA transfer. \\ \hline
-3:7 & \multicolumn{2}{|c|}{Reserved} \\ \hline
+3 & CBL\_STS\_CHG & Cable status change. \\ \hline
+4:7 & \multicolumn{2}{|c|}{Reserved} \\ \hline
 % FIXME: TRP dropped might overflow
 8:15 & TRP\_DROPPED & Triplets dropped counter. \\ \hline
 16:31 & \multicolumn{2}{|c|}{Reserved} \\ \hline
@@ -250,11 +261,35 @@ When the FG has completed a DMA transfer, it shall set this bit and raise an int
 
 The driver shall not use this as an indication that the FG is ready to start the next DMA transfer. It only signifies completion of the previously programmed DMA operation.
 
+\paragraph{CBL\_STS\_CHG}
+
+Assuming that cable status interrupts are enabled in HW\_CTRL, the FG shall set this bit and generate an interrupt when the cable status changes (i.e. wand is connected or disconnected).
+
+The driver can read the current cable status from the WAND\_STS register.
+
 \paragraph{TRP\_DROPPED}
 
 If the FG has to discard a triplet, it shall increment this counter by one.
 
 This would happen when the device has not been able to completely transfer a triplet into system RAM before the next triplet arrives.
+
+\subsubsection{WAND\_STS}
+
+\begin{description}
+\item[Address] BAR0 + 0x80
+\item[Driver access] RO
+\item[Default value] 0
+\item[Size] 32 bits
+\end{description}
+
+\begin{tabular}{|c|c|c|} \hline
+\textbf{Bit} & \textbf{Mnemonic} & \textbf{Description} \\ \hline
+0 & WAND\_PRESENT & Wand presence \\ \hline
+\end{tabular}
+
+\paragraph{WAND\_PRESENT}
+
+This bit will read 1 if a wand is connected, and 0 otherwise.
 
 \subsection{Suggested hardware operation}
 
