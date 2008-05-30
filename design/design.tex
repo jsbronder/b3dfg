@@ -177,14 +177,14 @@ BAR0 will contain the following 32-bit registers:
 0x08 & DMA\_STS & DMA status & 0 & RO \\ \hline
 \end{tabular}
 
-The registers at address 0x80 upwards map to the EC220 DMA control registers
+The registers at address 0x8000 upwards map to the EC220 DMA control registers
 as follows:
 
 \begin{tabular}{|c|c|} \hline
 \textbf{BAR0 offset} & \textbf{EC220 register} \\ \hline
-0x80 & DMA Address Register \\ \hline
-0x84 & Transfer Size Register \\ \hline
-0x88 & DMA Status Register \\ \hline
+0x8000 & DMA Address Register \\ \hline
+0x8004 & Transfer Size Register \\ \hline
+0x8008 & DMA Status Register \\ \hline
 \end{tabular}
 
 \subsubsection{FRM\_SIZE}
