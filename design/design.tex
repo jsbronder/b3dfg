@@ -175,7 +175,7 @@ BAR0 will contain the following 32-bit registers:
 0x00 & FRM\_SIZE & Frame size & 192 & RO \\ \hline
 0x04 & HW\_CTRL & Hardware control & 0 & R/W \\ \hline
 0x08 & DMA\_STS & DMA status & 0 & RO \\ \hline
-0x80 & WAND\_STS & Wand status & 0 & RO \\ \hline
+0x0C & WAND\_STS & Wand status & 0 & RO \\ \hline
 \end{tabular}
 
 The registers at address 0x8000 upwards map to the EC220 DMA control registers
@@ -276,7 +276,7 @@ This would happen when the device has not been able to completely transfer a tri
 \subsubsection{WAND\_STS}
 
 \begin{description}
-\item[Address] BAR0 + 0x80
+\item[Address] BAR0 + 0xC
 \item[Driver access] RO
 \item[Default value] 0
 \item[Size] 32 bits
