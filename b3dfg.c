@@ -52,14 +52,11 @@
 #define dbg(msg...)
 #endif
 
-/* pre-2.6.23-compat */
-#ifndef VM_CAN_NONLINEAR
-#define VM_CAN_NONLINEAR 0
-#endif
-
 #define DRIVER_NAME "b3dfg"
 #define PFX DRIVER_NAME ": "
 #define B3DFG_MAX_DEVS 4
+#define B3DFG_NR_TRIPLET_BUFFERS 4
+#define B3DFG_NR_FRAME_BUFFERS (B3DFG_NR_TRIPLET_BUFFERS * 3)
 #define B3DFG_FRAMES_PER_BUFFER 3
 
 #define B3DFG_BAR_REGS	0
@@ -126,6 +123,9 @@ struct b3dfg_dev {
 
 	/* we want to serialize some ioctl operations */
 	struct mutex ioctl_mutex;
+
+	/* preallocated frame buffers */
+	unsigned char *frame_buffer[B3DFG_NR_FRAME_BUFFERS];
 
 	/* buffers_lock protects num_buffers, buffers, buffer_queue */
 	spinlock_t buffer_lock;
@@ -203,20 +203,9 @@ static inline struct b3dfg_buffer *buffer_from_idx(struct b3dfg_dev *fgdev,
 	return &fgdev->buffers[idx];
 }
 
-static void free_buffer(struct b3dfg_buffer *buf)
-{
-	int i;
-	for (i = 0; i < B3DFG_FRAMES_PER_BUFFER; i++)
-		kfree(buf->frame[i]);
-}
-
 /* caller should hold buffer lock */
 static void free_all_buffers(struct b3dfg_dev *fgdev)
 {
-	int i;
-	for (i = 0; i < fgdev->num_buffers; i++)
-		free_buffer(&fgdev->buffers[i]);
-
 	kfree(fgdev->buffers);
 	fgdev->buffers = NULL;
 	fgdev->num_buffers = 0;
@@ -233,33 +222,23 @@ static void dequeue_all_buffers(struct b3dfg_dev *fgdev)
 }
 
 /* initialize a buffer: allocate its frames, set default values */
-static int init_buffer(struct b3dfg_dev *fgdev, struct b3dfg_buffer *buf)
+static void init_buffer(struct b3dfg_dev *fgdev, struct b3dfg_buffer *buf,
+	int idx)
 {
-	unsigned int frame_size = fgdev->frame_size;
+	unsigned int addr_offset = idx * B3DFG_FRAMES_PER_BUFFER;
 	int i;
 
 	memset(buf, 0, sizeof(struct b3dfg_buffer));
-	for (i = 0; i < B3DFG_FRAMES_PER_BUFFER; i++) {
-		buf->frame[i] = kmalloc(frame_size, GFP_KERNEL);
-		if (!buf->frame[i]) {
-			printk(KERN_ERR PFX "frame allocation failed\n");
-			goto err;
-		}
-	}
+	for (i = 0; i < B3DFG_FRAMES_PER_BUFFER; i++)
+		buf->frame[i] = fgdev->frame_buffer[addr_offset + i];
 
 	INIT_LIST_HEAD(&buf->list);
-	return 0;
-
-err:
-	free_buffer(buf);
-	return -ENOMEM;
 }
 
 /* adjust the number of buffers, growing or shrinking the pool appropriately. */
 static int set_num_buffers(struct b3dfg_dev *fgdev, int num_buffers)
 {
 	int i;
-	int r;
 	struct b3dfg_buffer *buffers;
 	unsigned long flags;
 
@@ -274,6 +253,12 @@ static int set_num_buffers(struct b3dfg_dev *fgdev, int num_buffers)
 		printk(KERN_ERR PFX
 			"cannot set buffer count while memory mappings are active\n");
 		return -EBUSY;
+	}
+
+	if (num_buffers > B3DFG_NR_TRIPLET_BUFFERS) {
+		printk(KERN_ERR PFX "limited to %d triplet buffers\n",
+			B3DFG_NR_TRIPLET_BUFFERS);
+		return -E2BIG;
 	}
 
 	spin_lock_irqsave(&fgdev->buffer_lock, flags);
@@ -297,17 +282,8 @@ static int set_num_buffers(struct b3dfg_dev *fgdev, int num_buffers)
 	if (!buffers)
 		return -ENOMEM;
 
-	for (i = 0; i < num_buffers; i++) {
-		r = init_buffer(fgdev, &buffers[i]);
-		if (r) {
-			int j;
-			/* free all buffers allocated so far */
-			for (j = 0; j < i; j++)
-				free_buffer(&buffers[j]);
-			kfree(buffers);
-			return r;
-		}
-	}
+	for (i = 0; i < num_buffers; i++)
+		init_buffer(fgdev, &buffers[i], i);
 
 	spin_lock_irqsave(&fgdev->buffer_lock, flags);
 	fgdev->buffers = buffers;
@@ -452,16 +428,16 @@ static void b3dfg_vma_close(struct vm_area_struct *vma)
 	atomic_dec(&fgdev->mapping_count);
 }
 
-#if LINUX_VERSION_CODE > KERNEL_VERSION(2,6,22)
 /* page fault handler */
-static int b3dfg_vma_fault(struct vm_area_struct *vma, struct vm_fault *vmf)
+static unsigned long b3dfg_vma_nopfn(struct vm_area_struct *vma,
+	unsigned long address)
 {
 	struct b3dfg_dev *fgdev = vma->vm_file->private_data;
-	unsigned long off = vmf->pgoff << PAGE_SHIFT;
+	unsigned long off = address - vma->vm_start;
 	unsigned int frame_size = fgdev->frame_size;
 	unsigned int buf_size = frame_size * B3DFG_FRAMES_PER_BUFFER;
 	unsigned long flags;
-	struct page *page;
+	unsigned char *addr;
 
 	/* determine which buffer the offset lies within */
 	unsigned int buf_idx = off / buf_size;
@@ -476,60 +452,20 @@ static int b3dfg_vma_fault(struct vm_area_struct *vma, struct vm_fault *vmf)
 	spin_lock_irqsave(&fgdev->buffer_lock, flags);
 	if (unlikely(buf_idx > fgdev->num_buffers)) {
 		spin_unlock_irqrestore(&fgdev->buffer_lock, flags);
-		return VM_FAULT_SIGBUS;
+		return NOPFN_SIGBUS;
 	}
 
-	page = virt_to_page(fgdev->buffers[buf_idx].frame[frm_idx] + frm_off);
+	addr = fgdev->buffers[buf_idx].frame[frm_idx] + frm_off;
+	vm_insert_pfn(vma, vma->vm_start + off,
+		virt_to_phys(addr) >> PAGE_SHIFT);
 	spin_unlock_irqrestore(&fgdev->buffer_lock, flags);
-	get_page(page);
-	vmf->page = page;
-	return 0;
+	return NOPFN_REFAULT;
 }
-#else
-/* page fault handler */
-static struct page *b3dfg_vma_nopage(struct vm_area_struct *vma,
-	unsigned long address, int *type)
-{
-	struct b3dfg_dev *fgdev = vma->vm_file->private_data;
-	unsigned long off = vma->vm_pgoff << PAGE_SHIFT;
-	unsigned int frame_size = fgdev->frame_size;
-	unsigned int buf_size = frame_size * B3DFG_FRAMES_PER_BUFFER;
-	unsigned long flags;
-	struct page *page;
-
-	/* determine which buffer the offset lies within */
-	unsigned int buf_idx = off / buf_size;
-	/* and the offset into the buffer */
-	unsigned int buf_off = off % buf_size;
-
-	/* determine which frame inside the buffer the offset lies in */
-	unsigned int frm_idx = buf_off / frame_size;
-	/* and the offset into the frame */
-	unsigned int frm_off = buf_off % frame_size;
-
-	spin_lock_irqsave(&fgdev->buffer_lock, flags);
-	if (unlikely(buf_idx > fgdev->num_buffers)) {
-		spin_unlock_irqrestore(&fgdev->buffer_lock, flags);
-		return NOPAGE_SIGBUS;
-	}
-
-	page = virt_to_page(fgdev->buffers[buf_idx].frame[frm_idx] + frm_off);
-	spin_unlock_irqrestore(&fgdev->buffer_lock, flags);
-	get_page(page);
-	if (*type)
-		*type = VM_FAULT_MINOR;
-	return page;
-}
-#endif
 
 static struct vm_operations_struct b3dfg_vm_ops = {
 	.open = b3dfg_vma_open,
 	.close = b3dfg_vma_close,
-#if LINUX_VERSION_CODE > KERNEL_VERSION(2,6,22)
-	.fault = b3dfg_vma_fault,
-#else
-	.nopage = b3dfg_vma_nopage,
-#endif
+	.nopfn = b3dfg_vma_nopfn,
 };
 
 static int enable_transmission(struct b3dfg_dev *fgdev)
@@ -853,7 +789,7 @@ static int b3dfg_mmap(struct file *filp, struct vm_area_struct *vma)
 		goto out;
 	}
 
-	vma->vm_flags |= VM_IO | VM_RESERVED | VM_CAN_NONLINEAR;
+	vma->vm_flags |= VM_IO | VM_RESERVED | VM_CAN_NONLINEAR | VM_PFNMAP;
 	vma->vm_ops = &b3dfg_vm_ops;
 	b3dfg_vma_open(vma);
 
@@ -871,17 +807,37 @@ static struct file_operations b3dfg_fops = {
 	.mmap = b3dfg_mmap,
 };
 
+static void free_all_frame_buffers(struct b3dfg_dev *fgdev)
+{
+	int i;
+	for (i = 0; i < B3DFG_NR_FRAME_BUFFERS; i++)
+		kfree(fgdev->frame_buffer[i]);
+}
+
 /* initialize device and any data structures. called before any interrupts
  * are enabled. */
-static void b3dfg_init_dev(struct b3dfg_dev *fgdev)
+static int b3dfg_init_dev(struct b3dfg_dev *fgdev)
 {
+	int i;
 	u32 frm_size = b3dfg_read32(fgdev, B3D_REG_FRM_SIZE);
+
 	fgdev->frame_size = frm_size * 4096;
+	for (i = 0; i < B3DFG_NR_FRAME_BUFFERS; i++) {
+		fgdev->frame_buffer[i] = kmalloc(fgdev->frame_size, GFP_KERNEL);
+		if (!fgdev->frame_buffer[i])
+			goto err_no_mem;
+	}
+
 	INIT_LIST_HEAD(&fgdev->buffer_queue);
 	init_waitqueue_head(&fgdev->buffer_waitqueue);
 	spin_lock_init(&fgdev->buffer_lock);
 	atomic_set(&fgdev->mapping_count, 0);
 	mutex_init(&fgdev->ioctl_mutex);
+	return 0;
+
+err_no_mem:
+	free_all_frame_buffers(fgdev);
+	return -ENOMEM;
 }
 
 /* find next free minor number, returns -1 if none are availabile */
@@ -952,16 +908,22 @@ static int __devinit b3dfg_probe(struct pci_dev *pdev,
 
 	fgdev->pdev = pdev;
 	pci_set_drvdata(pdev, fgdev);
-	b3dfg_init_dev(fgdev);
+	r = b3dfg_init_dev(fgdev);
+	if (r < 0) {
+		printk(KERN_ERR PFX "failed to initalize device\n");
+		goto err5;
+	}
 
 	r = request_irq(pdev->irq, b3dfg_intr, IRQF_SHARED, DRIVER_NAME, fgdev);
 	if (r) {
 		printk(KERN_ERR PFX "couldn't request irq %d\n", pdev->irq);
-		goto err5;
+		goto err6;
 	}
 
 	return 0;
 
+err6:
+	free_all_frame_buffers(fgdev);
 err5:
 	iounmap(fgdev->regs);
 err4:
@@ -989,6 +951,7 @@ static void __devexit b3dfg_remove(struct pci_dev *pdev)
 	pci_disable_device(pdev);
 	class_device_unregister(fgdev->classdev);
 	cdev_del(&fgdev->chardev);
+	free_all_frame_buffers(fgdev);
 	kfree(fgdev);
 	b3dfg_devices[minor] = 0;
 }
