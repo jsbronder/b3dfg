@@ -18,7 +18,7 @@
 
 \section{Introduction}
 
-The Frame Grabber (FG) will replace the costy and inconvenient IEEE1394-based image capture mechanism used in the Lava Chairside Oral Scanner.
+The Frame Grabber (FG) will replace the costy and inconvenient IEEE1394-based image capture mechanism used in the Lava Chairside Oral Scanner (COS).
 
 The FG will be custom designed as a PCI card, based on a Eureka PCI core. It will use direct memory access (DMA) to save frames into the computer memory.
 
@@ -31,6 +31,20 @@ This document details a suggested PCI-level interface to the FG.
 \subsection{Block diagram}
 
 \includegraphics{block.eps}
+
+\subsection{System overview}
+
+The frame grabber is being built for the Lava Chairside Oral Scanner, a Linux-based embedded device running our own software with our own handheld optical peripheral device attached. The product allows teeth to be scanned in 3D for the purpose of constructing dental restorations (crowns, bridges, etc).
+
+The optical peripheral is referred to as the "wand." The wand includes a microcontroller, an array of LEDs, some complicated optics, and some memory which stores some metadata (serial numbers, calibration data, etc). The wand is connected to the host computer over 2 interfaces:
+\begin{enumerate}
+\item The microcontroller is accessible over an RS232 interface, which we have connected to an internal USB-serial adapter. The microcontroller accepts commands to read/reflash the onboard memory, enable triggering (capture of image data), etc.
+\item The optics side is accessible over the PCI bus as specified by this document. Previous versions of the product instead used IEEE1394.
+\end{enumerate}
+
+This document is primarily concerned with the PCI side. The microcontroller interface is of little relevance for PCI development, but do be aware that for the real wand, you must start image capture (triggering) by sending a command to the USB microcontroller.
+
+The proprietary 3D imaging technology operates from an input of 3 images all captured at the same moment in time. You can view the system as having 3 cameras inside the wand. We currently capture images at resolution 1024x768 from each camera.
 
 \subsection{Hardware}
 
@@ -111,11 +125,11 @@ I will use the term \textbf{triplet} to indicate a set of 3 memory regions which
 
 I will use the term \textbf{frame} to refer to an individual image, a single memory region.
 
-A triplet therefore consists of 3 frames.
+A triplet therefore consists of 3 frames. At a logical level, the FG presents data in triplet-sized units: it presents 3 perfectly synchronized frames at a time. This is in contrast to the previous IEEE1394-based system, where we effectively had 3 individual cameras and had to be very careful that the frames coming back from each camera were synchronized.
 
 \subsection{Data transfer}
 
-As mentioned above, DMA data transfers will be controlled by the driver. The FG will provide direct access to the DMA control registers through a certain portion of the PCI address space.
+As mentioned above, DMA data transfers will be controlled by the driver. The FG will provide direct access to the EC220's DMA control registers through a certain portion of the PCI address space.
 
 When the FG is ready to write a frame into system memory, the FG will set a bit in a status register and raise an interrupt. The driver will examine the status register, determine that a frame is ready to be copied into memory, and will proceed to program memory addresses and other details into the EC220 DMA control registers.
 
@@ -199,6 +213,8 @@ as follows:
 
 This register contains the size of a frame, expressed in terms of 4kb pages. The decimal value 192 should be hardwired here, 192*4096=1024*768=786432
 
+This may need rethinking at some point in the future, because there are ongoing discussions about calibrating the device at a higher resolution. Right now, both the hardware and the driver make the assumption that the resolution is fixed and do not offer ways of requesting other resolutions.
+
 \subsubsection{HW\_CTRL}
 
 \begin{description}
@@ -236,7 +252,7 @@ Set this bit to enable interrupt generation for cable connection/disconnection e
 
 Upon reception of an interrupt, the driver shall use the contents of this register to decide how to handle the interrupt.
 
-The contents of this register are reset to 0 when read by the driver.
+With the eception of the NEXT\_TRF field, the contents of this register are reset to 0 when read by the driver.
 
 \begin{tabular}{|c|c|c|} \hline
 \textbf{Bit} & \textbf{Mnemonic} & \textbf{Description} \\ \hline
@@ -295,13 +311,13 @@ This bit will read 1 if a wand is connected, and 0 otherwise.
 
 \subsubsection{Interrupt generation}
 
-It is not mentioned explicitly below, but no interrupts shall ever be raised unless \texttt{HW\_CTRL:INT\_CTRL} is set. This applies to all events that generate interrupts.
+It is not mentioned explicitly below, but no interrupts shall ever be raised unless the relevant bit in \texttt{HW\_CTRL} is set. This applies to all events that generate interrupts.
 
-Generally, an interrupt is raised for readiness of a frame to be copied into system memory, and another interrupt is raised to mark a DMA completion. There are cases described when both of these may happen simultaneously. It is legal for the device to generate a single interrupt in this case.
+In the image transfer case, an interrupt is raised for readiness of a frame to be copied into system memory, and another interrupt is raised to mark a DMA completion. There are cases described when both of these may happen simultaneously. It is legal for the device to generate a single interrupt in this case.
 
 \subsubsection{Register accesses}
 
-Whenever read by the system, \texttt{DMA\_STS} and \texttt{TRP\_DROPPED} must be reset to 0 after the current value has been supplied.
+As identified in section 2, certain fields of certain registers must be reset to 0 after the current value has been supplied to the host system.
 
 \subsubsection{Image capture}
 
@@ -310,7 +326,7 @@ The FG interface to start and stop image capture is not visible over the PCI bus
 The FG shall capture 3 images simultaneously (one from each camera), and all of
 these frames become "ready" in the FG internal memory at the same point in time, but these individual frames are presented to the system individually.
 
-The FG shall proceed to capture a triplet into local buffers. When complete, the FG can start transferring these into memory. It shall first inform the system of the availability of a frame from camera 1, by setting \texttt{DMA\_STS:NEXT\_TRF} to 1 and raising an interrupt.
+The FG shall proceed to capture a triplet into local buffers on the PCI board. When complete, the FG can start transferring these into RAM on the host computer. It shall first inform the system of the availability of a frame from camera 1, by setting \texttt{DMA\_STS:NEXT\_TRF} to 1 and raising an interrupt.
 
 Immediately after, it is expected that the driver will negotiate the DMA transfer and write the appropriate values into the EC220 DMA registers. When the start bit is raised, the FG shall start the data transfer.
 
@@ -319,7 +335,7 @@ When the DMA transfer is complete, the FG shall set \texttt{DMA\_STS:DMA\_COMP}.
 
 Identically to frame 1, the driver will start the DMA transfer, the FG shall set \texttt{DMA\_STS:DMA\_COMP} when completed and raise another interrupt.
 
-The process shall then repeat for frame 3, except \texttt{DMA\_STS:NEXT\_TRF} shall be set to 3 at the appropriate time. After the transfer of the 3rd frame has completed, the frame triplet has been completed successfully, and it is assumed that the next triplet is not yet ready to be transferred. At the completion of the 3rd frame copy into system RAM, \texttt{DMA\_STS:DMA\_COMP} shall be set, but \texttt{DMA\_STS:NEXT\_TRF} shall be left as 0. On the other hand, if the next triplet is ready to be transferred, \texttt{DMA\_STS:NEXT\_TRF} can be set appropriately and a single interrupt can be used to signify both that frame 3 of the previous triplet completed and that frame 1 of the next triplet is ready to be transferred.
+The process shall then repeat for frame 3, except \texttt{DMA\_STS:NEXT\_TRF} shall be set to 3 at the appropriate time. After the transfer of the 3rd frame has completed, the frame triplet has been completed successfully, and it is assumed that the next triplet is not yet ready to be transferred. At the completion of the 3rd frame copy into system RAM, \texttt{DMA\_STS:DMA\_COMP} shall be set, but \texttt{DMA\_STS:NEXT\_TRF} shall be left as 0.
 
 The process repeats until frame transmission is disabled.
 
@@ -331,7 +347,7 @@ Logically, the FG shall lock a triplet buffer as soon as it offers the first fra
 
 When a triplet buffer is locked, the FG shall not capture any images into it. The data there is locked into place until it is unlocked later.
 
-As the FG will always transfer triplets sequentially, it is not possible under the design of this system for more than one triplet buffer to be locked at any one time. In other words, there will always be at least one triplet buffer unlocked, where new data can be captured.
+As the FG will always transfer triplets sequentially, it is not possible under the design of this system for more than one triplet buffer to be locked at any one time. In other words, there will always be at least one triplet buffer unlocked where new data can be captured.
 
 This may lead to the scenario where the contents of an unlocked frame triplet buffer need to be discarded because a new image is ready to be captured. This is by design, but will only happen under erroneous circumstances where the driver/OS is not able to keep up. The driver/OS will lose a number of triplets but it will be able to detect this and resume OK. See the scenarios below for further illustrations of this.
 
@@ -411,7 +427,7 @@ The driver shall read the frame size from \texttt{FRM\_SIZE} and reserve a serie
 
 \subsubsection{Enabling image transmission}
 
-When ready to process images, the driver shall set the \texttt{INT\_CTRL} bit in \texttt{HW\_CTRL}. Image acqusition will actually start when the software later sends a command to the microcontroller over the USB bus (out of the scope of the document).
+When ready to process images, the driver shall set the \texttt{FRM\_INT\_CTRL} bit in \texttt{HW\_CTRL}. Image acqusition will actually start when the software later sends a command to the microcontroller over the USB bus (out of the scope of the document).
 
 \subsubsection{Interrupt handling}
 
@@ -427,7 +443,7 @@ If \textbf{DMA\_STS:DMA\_COMP} is nonzero, the driver shall observe that the pre
 
 \subsubsection{Ending transmission}
 
-When the image capture session is to be terminated, the driver shall clear the \texttt{INT\_CTRL} bit in the \texttt{HW\_CTRL} register. The driver shall then read \texttt{PL\_DROPPED} in order to reset its value.
+When the image capture session is to be terminated, the driver shall clear the \texttt{INT\_CTRL} bit in the \texttt{HW\_CTRL} register. The driver shall then read \texttt{TRP\_DROPPED} in order to reset its value.
 
 It is assumed that the higher level software will have already stopped image acqusition by sending a command to the microcontroller over the USB bus.
 
