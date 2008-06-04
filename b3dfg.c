@@ -52,11 +52,6 @@
 #define dbg(msg...)
 #endif
 
-/* pre-2.6.23-compat */
-#ifndef VM_CAN_NONLINEAR
-#define VM_CAN_NONLINEAR 0
-#endif
-
 #define DRIVER_NAME "b3dfg"
 #define PFX DRIVER_NAME ": "
 #define B3DFG_MAX_DEVS 4
@@ -433,16 +428,16 @@ static void b3dfg_vma_close(struct vm_area_struct *vma)
 	atomic_dec(&fgdev->mapping_count);
 }
 
-#if LINUX_VERSION_CODE > KERNEL_VERSION(2,6,22)
 /* page fault handler */
-static int b3dfg_vma_fault(struct vm_area_struct *vma, struct vm_fault *vmf)
+static unsigned long b3dfg_vma_nopfn(struct vm_area_struct *vma,
+	unsigned long address)
 {
 	struct b3dfg_dev *fgdev = vma->vm_file->private_data;
-	unsigned long off = vmf->pgoff << PAGE_SHIFT;
+	unsigned long off = address - vma->vm_start;
 	unsigned int frame_size = fgdev->frame_size;
 	unsigned int buf_size = frame_size * B3DFG_FRAMES_PER_BUFFER;
 	unsigned long flags;
-	struct page *page;
+	unsigned char *addr;
 
 	/* determine which buffer the offset lies within */
 	unsigned int buf_idx = off / buf_size;
@@ -457,60 +452,20 @@ static int b3dfg_vma_fault(struct vm_area_struct *vma, struct vm_fault *vmf)
 	spin_lock_irqsave(&fgdev->buffer_lock, flags);
 	if (unlikely(buf_idx > fgdev->num_buffers)) {
 		spin_unlock_irqrestore(&fgdev->buffer_lock, flags);
-		return VM_FAULT_SIGBUS;
+		return NOPFN_SIGBUS;
 	}
 
-	page = virt_to_page(fgdev->buffers[buf_idx].frame[frm_idx] + frm_off);
+	addr = fgdev->buffers[buf_idx].frame[frm_idx] + frm_off;
+	vm_insert_pfn(vma, vma->vm_start + off,
+		virt_to_phys(addr) >> PAGE_SHIFT);
 	spin_unlock_irqrestore(&fgdev->buffer_lock, flags);
-	get_page(page);
-	vmf->page = page;
-	return 0;
+	return NOPFN_REFAULT;
 }
-#else
-/* page fault handler */
-static struct page *b3dfg_vma_nopage(struct vm_area_struct *vma,
-	unsigned long address, int *type)
-{
-	struct b3dfg_dev *fgdev = vma->vm_file->private_data;
-	unsigned long off = vma->vm_pgoff << PAGE_SHIFT;
-	unsigned int frame_size = fgdev->frame_size;
-	unsigned int buf_size = frame_size * B3DFG_FRAMES_PER_BUFFER;
-	unsigned long flags;
-	struct page *page;
-
-	/* determine which buffer the offset lies within */
-	unsigned int buf_idx = off / buf_size;
-	/* and the offset into the buffer */
-	unsigned int buf_off = off % buf_size;
-
-	/* determine which frame inside the buffer the offset lies in */
-	unsigned int frm_idx = buf_off / frame_size;
-	/* and the offset into the frame */
-	unsigned int frm_off = buf_off % frame_size;
-
-	spin_lock_irqsave(&fgdev->buffer_lock, flags);
-	if (unlikely(buf_idx > fgdev->num_buffers)) {
-		spin_unlock_irqrestore(&fgdev->buffer_lock, flags);
-		return NOPAGE_SIGBUS;
-	}
-
-	page = virt_to_page(fgdev->buffers[buf_idx].frame[frm_idx] + frm_off);
-	spin_unlock_irqrestore(&fgdev->buffer_lock, flags);
-	get_page(page);
-	if (*type)
-		*type = VM_FAULT_MINOR;
-	return page;
-}
-#endif
 
 static struct vm_operations_struct b3dfg_vm_ops = {
 	.open = b3dfg_vma_open,
 	.close = b3dfg_vma_close,
-#if LINUX_VERSION_CODE > KERNEL_VERSION(2,6,22)
-	.fault = b3dfg_vma_fault,
-#else
-	.nopage = b3dfg_vma_nopage,
-#endif
+	.nopfn = b3dfg_vma_nopfn,
 };
 
 static int enable_transmission(struct b3dfg_dev *fgdev)
@@ -834,7 +789,7 @@ static int b3dfg_mmap(struct file *filp, struct vm_area_struct *vma)
 		goto out;
 	}
 
-	vma->vm_flags |= VM_IO | VM_RESERVED | VM_CAN_NONLINEAR;
+	vma->vm_flags |= VM_IO | VM_RESERVED | VM_CAN_NONLINEAR | VM_PFNMAP;
 	vma->vm_ops = &b3dfg_vm_ops;
 	b3dfg_vma_open(vma);
 
