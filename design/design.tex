@@ -551,5 +551,25 @@ poll shall add a waitqueue entry which triggers as soon as an image is transferr
 
 This is almost a no-op apart from cleaning up.
 
+\section{Future design changes}
+
+\subsection{Scatter-gather DMA}
+
+The current design has a flaw in that it requires the driver to supply frame buffers of size 768kb.
+
+In a standard system, the driver must allocate buffers that are physically contiguous for these DMA transfers. Unfortunately any experienced kernel hacker will tell you that it is not reasonable to ask for such large regions of physically contiguous memory - memory will get fragmented over time, and sooner or later the kernel will not be able to satisfy such a demanding request.
+
+The usual solution here is to implement scatter-gather DMA, where instead of providing a single address for a fixed size buffer, the driver provides a scatterlist of smaller buffers of varying length. The device then transfers the first part of the data into the first buffer, the following part into the 2nd buffer, etc.
+
+Scatter-gather would be a significant improvement on the interface design level: we could supply a scatterlist to cover the transfer of an entire triplet, and hence only have one interrupt per triplet copy. This does represent a significant shift in design though, where the EC220 DMA controller would be programmed by the FG user logic rather than the driver on the host system.
+
+We do also have the option of paying Eureka to design/implement the scatter-gather logic for us.
+
+Another option is to take advantage of the IOMMU present on our Opteron CPUs. The IOMMU acts upon bus addresses in the same way that the MMU operates on physical memory addresses to provide a virtual address space. The IOMMU theoretically allows for a number of individual regions of physical memory to be mapped into a single contiguous allocation. This effectively allows for implementation of scatter-gather DMA without the hardware being aware of it.
+
+Unless we can get a reliable IOMMU-based solution up and running quickly, the chosen solution is for us to gloss over the problem with the reason of getting the initial board completed sooner rather than later.
+
+On the Linux side, kmalloc() seems happy to allocate loads of 768kb buffers on newer kernels (perhaps the fragmentation avoidance patches helped here), and we will minimize the chance that one of these allocations will ever fail by doing all the allocations at module initialization time (intended to happen quite early during boot, when memory fragmentation should be minimal). The driver will hence only allow a limited number of buffers, will only allow a single FG device (to avoid complications when deciding which device is using which pre-allocated buffer), and will be wasting memory when it is not being used, but this seems like an OK price to pay for the initial revision.
+
 \end{document}
 
