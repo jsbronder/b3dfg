@@ -78,8 +78,8 @@ int main(void)
 	}
 
 	for (i = 0; i < NUM_BUFFERS; i++) {
-		r = b3dfg_wait_buffer(dev, i, NULL);
-		if (r) {
+		r = b3dfg_wait_buffer(dev, i, 1000, NULL);
+		if (r < 0) {
 			fprintf(stderr, "wait_buffer failed\n");
 			goto out;
 		}

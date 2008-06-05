@@ -448,24 +448,32 @@ API_EXPORTED int b3dfg_poll_buffer(b3dfg_dev *dev, int buffer,
  *
  * \param dev a device handle
  * \param buffer the buffer to wait upon
+ * \param timeout timeout in milliseconds, or 0 for unlimited timeout
  * \param dropped output location for number of dropped triplets (optional, can
- * be NULL)
- * \returns 0 on success (buffer now contains data and has been moved to
- * polled state)
- * \returns non-zero on error
+ * be NULL). Only populated on return code >= 0.
+ * \returns milliseconds remaining in timeout on success (buffer now contains
+ * data and has been moved to polled state), 0 if there was no timeout
+ * \returns -ETIMEDOUT on timeout
+ * \returns other negative code on other error
  */
 API_EXPORTED int b3dfg_wait_buffer(b3dfg_dev *dev, int buffer,
-	unsigned int *dropped)
+	unsigned int timeout, unsigned int *dropped)
 {
-	struct b3dfg_poll p = { .buffer_idx = buffer };
+	struct b3dfg_wait w = { .buffer_idx = buffer, .timeout = timeout };
 	int r;
 
-	b3dfg_dbg("buffer %d", buffer);
-	r = ioctl(dev->fd, B3DFG_IOCTWAITBUF, &p);
-	if (r < 0)
-		b3dfg_err("IOCQWAITBUF(%d) failed r=%d errno=%d", buffer, r, errno);
-	else if (dropped)
-		*dropped = p.triplets_dropped;
+	b3dfg_dbg("buffer %d timeout %d", buffer, timeout);
+	r = ioctl(dev->fd, B3DFG_IOCTWAITBUF, &w);
+	b3dfg_dbg("returned %d", r);
+	if (r < 0) {
+		if (timeout && errno == ETIMEDOUT) {
+			b3dfg_dbg("timed out");
+			return -ETIMEDOUT;
+		}
+		b3dfg_err("IOCQWAITBUF(%d) failed r=%d errno=%d",
+			buffer, r, errno);
+	} else if (dropped)
+		*dropped = w.triplets_dropped;
 	return r;
 }
 

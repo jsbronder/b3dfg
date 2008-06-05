@@ -68,7 +68,7 @@
 #define B3DFG_IOCTTRANS			_IO(B3DFG_IOC_MAGIC, 3)
 #define B3DFG_IOCTQUEUEBUF		_IO(B3DFG_IOC_MAGIC, 4)
 #define B3DFG_IOCTPOLLBUF		_IOWR(B3DFG_IOC_MAGIC, 5, struct b3dfg_poll)
-#define B3DFG_IOCTWAITBUF		_IOWR(B3DFG_IOC_MAGIC, 6, struct b3dfg_poll)
+#define B3DFG_IOCTWAITBUF		_IOWR(B3DFG_IOC_MAGIC, 6, struct b3dfg_wait)
 
 enum {
 	/* number of 4kb pages per frame */
@@ -163,6 +163,12 @@ static const struct pci_device_id b3dfg_ids[] __devinitdata = {
 
 struct b3dfg_poll {
 	int buffer_idx;
+	unsigned int triplets_dropped;
+};
+
+struct b3dfg_wait {
+	int buffer_idx;
+	unsigned int timeout;
 	unsigned int triplets_dropped;
 };
 
@@ -396,12 +402,12 @@ static u8 buffer_state(struct b3dfg_dev *fgdev, struct b3dfg_buffer *buf)
 /* sleep until a specific buffer becomes populated */
 static int wait_buffer(struct b3dfg_dev *fgdev, void __user *arg)
 {
-	struct b3dfg_poll p;
+	struct b3dfg_wait w;
 	struct b3dfg_buffer *buf;
 	unsigned long flags;
 	int r;
 
-	if (copy_from_user(&p, arg, sizeof(p)))
+	if (copy_from_user(&w, arg, sizeof(w)))
 		return -EFAULT;
 
 	if (unlikely(!fgdev->transmission_enabled)) {
@@ -411,7 +417,7 @@ static int wait_buffer(struct b3dfg_dev *fgdev, void __user *arg)
 	}
 
 	spin_lock_irqsave(&fgdev->buffer_lock, flags);
-	buf = buffer_from_idx(fgdev, p.buffer_idx);
+	buf = buffer_from_idx(fgdev, w.buffer_idx);
 	if (unlikely(!buf)) {
 		r = -ENOENT;
 		goto out;
@@ -424,10 +430,23 @@ static int wait_buffer(struct b3dfg_dev *fgdev, void __user *arg)
 
 	spin_unlock_irqrestore(&fgdev->buffer_lock, flags);
 	/* FIXME: what prevents the buffer going away at this time? */
-	r = wait_event_interruptible(fgdev->buffer_waitqueue,
-		buffer_state(fgdev, buf) == B3DFG_BUFFER_POPULATED);
-	if (unlikely(r))
-		return -ERESTARTSYS;
+
+	if (w.timeout > 0) {
+		r = wait_event_interruptible_timeout(fgdev->buffer_waitqueue,
+			buffer_state(fgdev, buf) == B3DFG_BUFFER_POPULATED,
+			(w.timeout * HZ) / 1000);
+		if (unlikely(r < 0))
+			return r;
+		else if (unlikely(buffer_state(fgdev, buf)
+				!= B3DFG_BUFFER_POPULATED))
+			return -ETIMEDOUT;
+		w.timeout = r * 1000 / HZ;
+	} else {
+		r = wait_event_interruptible(fgdev->buffer_waitqueue,
+			buffer_state(fgdev, buf) == B3DFG_BUFFER_POPULATED);
+		if (unlikely(r))
+			return -ERESTARTSYS;
+	}
 
 	spin_lock_irqsave(&fgdev->buffer_lock, flags);
 	/* FIXME: rediscover buffer? it might have changed during the unlocked
@@ -436,10 +455,10 @@ static int wait_buffer(struct b3dfg_dev *fgdev, void __user *arg)
 
 out_triplets_dropped:
 	spin_lock(&fgdev->triplets_dropped_lock);
-	p.triplets_dropped = fgdev->triplets_dropped;
+	w.triplets_dropped = fgdev->triplets_dropped;
 	fgdev->triplets_dropped = 0;
 	spin_unlock(&fgdev->triplets_dropped_lock);
-	if (copy_to_user(arg, &p, sizeof(p)))
+	if (copy_to_user(arg, &w, sizeof(w)))
 		r = -EFAULT;
 out:
 	spin_unlock_irqrestore(&fgdev->buffer_lock, flags);
