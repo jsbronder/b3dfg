@@ -1,0 +1,73 @@
+b3dfg kernel driver design
+==========================
+
+b3dfg is a character device driver responsible for making incoming image
+data available to userspace.
+
+The high-level interface is that a program opens the device node
+(/dev/b3dfg0), uses ioctls to configure the session, and then uses mmap() to
+retreive a mapped memory area corresponding to where image data will arrive.
+Further ioctls are then used to start transmission and infer information about
+locations of the freshest image data.
+
+The design is similar to the one implemented by the video1394 driver.
+
+The user requests a certain number of buffers, where each buffer corresponds
+to a triplet (i.e. it includes 3 frames). The user can then map the frame
+buffers into userspace, and enable data transmission.
+
+By default, buffers are reserved but not use. The user must queue buffers that
+he wishes to receive image data into. Buffers are always populated in the
+order that they are queued. This is implemented as the buffer_queue list.
+
+When setting up a DMA transfer, the driver negotiates transfer into the first
+buffer in the queue. When complete, that buffer is removed from the queue and
+is marked as populated.
+
+As the user queued the buffers in a certain order, he is aware of which buffer
+will become populated first, so he will monitor them through the wait_buffer
+and/or poll_buffer ioctls. These ioctls tell you when a buffer moves into the
+populated state. Once the user has been informed of this, the buffer is moved
+into the polled state. Polled buffers can then be requeued at any time.
+
+ioctls
+======
+
+B3DFG_IOCGFRMSZ: obtains the frame size (i.e. image resolution) for the device
+B3DFG_IOCTNUMBUFS: request a specific number of buffers
+B3DFG_IOCTTRANS: start or stop transmission
+B3DFG_IOCTQUEUEBUF: move buffer from polled to queued state
+B3DFG_IOCQPOLLBUF: non-blocking check to see if queued buffer has moved into
+populated state
+B3DFG_IOCQWAITBUF: blocking version of POLLBUF
+
+
+ioctl serialization
+===================
+ioctl_mutex is used to serialize ioctl's that might otherwise run in parallel,
+and to prevent ioctl's from running while other operations are happening. For
+example, bad things would happen if transmission could be disabled while
+poll() was in progress.
+
+
+buffer protection
+=================
+A single spinlock protects all the buffers, the associated list_head, and the
+number of allocated buffers. These structures are shared between ioctls,
+other file operations, and the interrupt handler.
+
+
+Transfer sanitization
+=====================
+The driver makes an effort to ensure that the hardware behaves, i.e. it sends
+frame 1, then 2, then 3, then 1, ...
+cur_dma_frame_idx is a variable used to track and check this.
+
+
+Partial transfers
+=================
+
+After a crash or other abnormal event, the device may start by presenting
+frame 2 or 3. In this case, the driver completes the transfer of that partial
+triplet but throws the results away, and then continues capturing and
+presenting complete triplets. discard_frame_start is used to implement this.
