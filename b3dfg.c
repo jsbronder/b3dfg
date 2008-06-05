@@ -544,29 +544,18 @@ static int set_transmission(struct b3dfg_dev *fgdev, int enabled)
 	return 0;
 }
 
-static int nr_unhandled = 0;
-
-static void unhandled_irq(void)
+static irqreturn_t b3dfg_intr(int irq, void *dev_id)
 {
-	if (++nr_unhandled == 10) {
-		printk("b3dfg too many unhandled interrupts\n");
-		panic("b3dfg: too many unhandled interrupts");
-	}
-}
-
-static irqreturn_t handle_interrupt(struct b3dfg_dev *fgdev)
-{
+	struct b3dfg_dev *fgdev = dev_id;
 	struct device *dev;
 	struct b3dfg_buffer *buf = NULL;
 	unsigned int frame_size;
 	u32 sts;
 	int next_trf;
 	int need_ack = 1;
-	int unhandled = 0;
 
 	if (unlikely(!fgdev->transmission_enabled)) {
 		printk("ignore interrupt, TX disabled\n");
-		unhandled = 1;
 		/* FIXME should return IRQ_NONE when we are stable */
 		goto out;
 	}
@@ -574,7 +563,6 @@ static irqreturn_t handle_interrupt(struct b3dfg_dev *fgdev)
 	sts = b3dfg_read32(fgdev, B3D_REG_DMA_STS);
 	if (unlikely(sts == 0)) {
 		printk("ignore interrupt, brontes DMA status is 0\n");
-		unhandled = 1;
 		/* FIXME should return IRQ_NONE when we are stable */
 		goto out;
 	}
@@ -663,19 +651,7 @@ out:
 		dbg("acknowledging interrupt\n");
 		b3dfg_write32(fgdev, B3D_REG_EC220_DMA_STS, 0x0b);
 	}
-	if (unhandled)
-		unhandled_irq();
 	return IRQ_HANDLED;
-}
-
-#if LINUX_VERSION_CODE > KERNEL_VERSION(2,6,18)
-static irqreturn_t b3dfg_intr(int irq, void *dev_id)
-#else
-static irqreturn_t b3dfg_intr(int irq, void *dev_id, struct pt_regs *regs)
-#endif
-{
-	struct b3dfg_dev *fgdev = dev_id;
-	return handle_interrupt(fgdev);
 }
 
 static int b3dfg_open(struct inode *inode, struct file *filp)
