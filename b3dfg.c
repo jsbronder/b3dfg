@@ -98,9 +98,6 @@ enum {
 	B3D_REG_EC220_DMA_STS = 0x8008,
 };
 
-#define B3DFG_BUFFER_STATUS_QUEUED			(1<<0)
-#define B3DFG_BUFFER_STATUS_POPULATED		(1<<1)
-
 enum b3dfg_buffer_state {
 	B3DFG_BUFFER_POLLED = 0,
 	B3DFG_BUFFER_PENDING,
@@ -423,7 +420,7 @@ static int wait_buffer(struct b3dfg_dev *fgdev, void __user *arg)
 		goto out;
 	}
 
-	if (buf->state == B3DFG_BUFFER_STATUS_POPULATED) {
+	if (buf->state == B3DFG_BUFFER_POPULATED) {
 		r = 0;
 		goto out_triplets_dropped;
 	}
