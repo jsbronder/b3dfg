@@ -148,7 +148,7 @@ Possible todo items:
 
 Cable status interrupt implementation. The design docs were recently updated
 to include a mechanism for detecting when the wand is connected and
-disconnected, but this functionality is not yet implemented in the driver. I
+disconnected, but this functionality is not fully implemented in the driver. I
 suggest the driver attempts to keep track of the wand status, and offers an
 ioctl to check this. It could also inform the status in the poll_buffer and
 wait_buffer ioctls. poll() should maybe return POLLERR or something when the
@@ -158,12 +158,6 @@ should disable those interrupts (and perhaps report this situation through
 the interfaces somehow). This situation may happen with a bad cable which
 appears to be connected and disconnected very frequently. All of the above
 needs to be exposed through libb3dfg too.
-
-wait_buffer timeout. I recommended to Phil that he uses the wait_buffer ioctl
-rather than poll() when waiting for image data. poll() is slightly more
-expensive as it must look at the status of all buffers. However there is one
-bit of missing functionality: wait_buffer blocks forever, whereas poll can be
-given a timeout. We should add an optional timeout to the wait_buffer ioctl.
 
 Locking review. We won't be using threads or anything initially, but the
 driver should be as close to usual kernel quality as possible - if two ioctls

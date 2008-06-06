@@ -50,6 +50,9 @@ int main(void)
 		goto out;
 	}
 
+	printf("wand is %s\n",
+		b3dfg_get_wand_status(dev) ? "connected" : "disconnected");
+
 	frame_size = b3dfg_get_frame_size(dev);
 	r = b3dfg_set_num_buffers(dev, NUM_BUFFERS);
 	if (r) {

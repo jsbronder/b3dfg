@@ -69,6 +69,7 @@
 #define B3DFG_IOCTQUEUEBUF		_IO(B3DFG_IOC_MAGIC, 4)
 #define B3DFG_IOCTPOLLBUF		_IOWR(B3DFG_IOC_MAGIC, 5, struct b3dfg_poll)
 #define B3DFG_IOCTWAITBUF		_IOWR(B3DFG_IOC_MAGIC, 6, struct b3dfg_wait)
+#define B3DFG_IOCGWANDSTAT		_IOR(B3DFG_IOC_MAGIC, 7, int)
 
 enum {
 	/* number of 4kb pages per frame */
@@ -81,6 +82,9 @@ enum {
 	 * bit 2 indicates the previous DMA transfer has completed
 	 * bit 8:15 - counter of number of discarded triplets */
 	B3D_REG_DMA_STS = 0x8,
+
+	/* bit 0: wand status (1 = present, 0 = disconnected) */
+	B3D_REG_WAND_STS = 0xc,
 
 	/* bus address for DMA transfers. lower 2 bits must be zero because DMA
 	 * works with 32 bit word size. */
@@ -516,6 +520,13 @@ static struct vm_operations_struct b3dfg_vm_ops = {
 	.nopfn = b3dfg_vma_nopfn,
 };
 
+static int get_wand_status(struct b3dfg_dev *fgdev, int __user *arg)
+{
+	u32 wndstat = b3dfg_read32(fgdev, B3D_REG_WAND_STS);
+	dbg("wand status %x\n", wndstat);
+	return __put_user(wndstat & 0x1, arg);
+}
+
 static int enable_transmission(struct b3dfg_dev *fgdev)
 {
 	u16 command;
@@ -742,6 +753,8 @@ static long b3dfg_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 	switch (cmd) {
 	case B3DFG_IOCGFRMSZ:
 		return __put_user(fgdev->frame_size, (int __user *) arg);
+	case B3DFG_IOCGWANDSTAT:
+		return get_wand_status(fgdev, (int __user *) arg);
 	case B3DFG_IOCTNUMBUFS:
 		mutex_lock(&fgdev->ioctl_mutex);
 		r = set_num_buffers(fgdev, (int) arg);

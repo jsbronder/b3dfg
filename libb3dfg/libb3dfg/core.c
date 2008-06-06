@@ -305,6 +305,29 @@ API_EXPORTED void b3dfg_close(b3dfg_dev *dev)
 		b3dfg_err("close failed errno=%d", errno);
 }
 
+/** \ingroup core
+ * Retrieve wand cable status.
+ *
+ * \param dev a device handle
+ * \returns 1 if wand is present
+ * \returns 0 if wand is disconnected
+ * \returns negative code on error
+ */
+API_EXPORTED int b3dfg_get_wand_status(b3dfg_dev *dev)
+{
+	int r;
+	int status;
+
+	r = ioctl(dev->fd, B3DFG_IOCGWANDSTAT, &status);
+	if (r < 0) {
+		b3dfg_err("IOCGWANDSTAT failed %d errno=%d", r, errno);
+		return r;
+	}
+
+	return status;
+}
+
+
 /** \ingroup io
  * Obtain a file descriptor corresponding to a device handle. You can pass this
  * file descriptor to the poll() or select() system calls (or a variant) -

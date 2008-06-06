@@ -29,6 +29,7 @@ struct b3dfg_wait {
 #define B3DFG_IOCTQUEUEBUF      _IO(B3DFG_IOC_MAGIC, 4)
 #define B3DFG_IOCTPOLLBUF       _IOWR(B3DFG_IOC_MAGIC, 5, struct b3dfg_poll)
 #define B3DFG_IOCTWAITBUF       _IOWR(B3DFG_IOC_MAGIC, 6, struct b3dfg_wait)
+#define B3DFG_IOCGWANDSTAT	_IOR(B3DFG_IOC_MAGIC, 7, int)
 
 #define FRAMES_PER_BUFFER 3
 
