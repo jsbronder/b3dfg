@@ -854,6 +854,14 @@ static int b3dfg_init_dev(struct b3dfg_dev *fgdev)
 	int i;
 	u32 frm_size = b3dfg_read32(fgdev, B3D_REG_FRM_SIZE);
 
+	/* disable interrupts. in abnormal circumstances (e.g. after a crash) the
+	 * board may still be transmitting from the previous session. if we ensure
+	 * that interrupts are disabled before we later enable them, we are sure
+	 * to capture a triplet from the start, rather than starting from frame
+	 * 2 or 3. disabling interrupts causes the FG to throw away all buffered
+	 * data and stop buffering more until interrupts are enabled again. */
+	b3dfg_write32(fgdev, B3D_REG_HW_CTRL, 0);
+
 	fgdev->frame_size = frm_size * 4096;
 	for (i = 0; i < B3DFG_NR_FRAME_BUFFERS; i++) {
 		fgdev->frame_buffer[i] = kmalloc(fgdev->frame_size, GFP_KERNEL);
