@@ -106,8 +106,7 @@ The device should include a register to control whether interrupts are enabled o
 Each PCI device has a series of identifiers generally used by drivers to identify the device and how it should communicate. The EC220 lets us specify our own IDs, and we should do so in a driver-friendly way.
 
 \begin{description}
-%FIXME
-\item[Vendor ID] We will need to purchase our own vendor ID before production from the PCI SIG. During development, we can use the Eureka ID. (2 bytes)
+\item[Vendor ID] We have purchased our own ID which should be used here: 0x0b3d (2 bytes)
 \item[Product ID] Use of this field is left up to the owner of the vendor ID. We should get an initial value, and not change this unless the communications protocols between driver and FG change significantly. (2 bytes)
 \item[Revision] We should use this as a version number, i.e. increment it when minor changes are made. However, if any of these changes affect the protocol significantly, we should change the product ID and reset the revision. (1 byte)
 \item[Subvendor ID/Subproduct ID] I think the above fields provide enough versioning, we can reserve these for future use. (2 bytes each)
@@ -178,7 +177,7 @@ FIXME not sure what to put here
 Set both to 0
 
 \subsubsection{VENDOR\_ID}
-During development, set to 0x1901 (Eureka). Before production, we will purchase our own vendor ID from the PCI SIG, which will be placed here.
+Set to 0x0b3d. This is our own vendor ID, purchased from the PCI SIG.
 
 \subsection{Registers}
 
