@@ -63,11 +63,3 @@ The driver makes an effort to ensure that the hardware behaves, i.e. it sends
 frame 1, then 2, then 3, then 1, ...
 cur_dma_frame_idx is a variable used to track and check this.
 
-
-Partial transfers
-=================
-
-After a crash or other abnormal event, the device may start by presenting
-frame 2 or 3. In this case, the driver completes the transfer of that partial
-triplet but throws the results away, and then continues capturing and
-presenting complete triplets. discard_frame_start is used to implement this.

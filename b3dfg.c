@@ -141,10 +141,10 @@ struct b3dfg_dev {
 	spinlock_t triplets_dropped_lock;
 	unsigned int triplets_dropped;
 
+	/* FIXME: we need some locking here. this could be accessed in parallel
+	 * from the queue_buffer ioctl and the interrupt handler. */
 	int cur_dma_frame_idx;
 	dma_addr_t cur_dma_frame_addr;
-
-	int discard_frame_start;
 
 	unsigned int transmission_enabled:1;
 	unsigned int triplet_ready:1;
@@ -340,7 +340,7 @@ static int queue_buffer(struct b3dfg_dev *fgdev, int bufidx)
 	if (fgdev->transmission_enabled && fgdev->triplet_ready) {
 		dbg("triplet is ready, so pushing immediately\n");
 		fgdev->triplet_ready = 0;
-		setup_frame_transfer(fgdev, buf, fgdev->discard_frame_start, 0);
+		setup_frame_transfer(fgdev, buf, 0, 0);
 	}
 
 out:
@@ -534,7 +534,6 @@ static int get_wand_status(struct b3dfg_dev *fgdev, int __user *arg)
 static int enable_transmission(struct b3dfg_dev *fgdev)
 {
 	u16 command;
-	unsigned int next_trf;
 	unsigned long flags;
 
 	printk(KERN_INFO PFX "enable transmission\n");
@@ -555,18 +554,6 @@ static int enable_transmission(struct b3dfg_dev *fgdev)
 		return -EINVAL;
 	}
 	spin_unlock_irqrestore(&fgdev->buffer_lock, flags);
-
-	next_trf = b3dfg_read32(fgdev, B3D_REG_DMA_STS) & 0x3;
-	if (next_trf > 1) {
-		/* device is going to present frame 2/3 or 3/3 first. as this forms
-		 * an incomplete triplet, we must discard those frames and then start
-		 * fresh at the beginning of the following triplet. */
-		printk(KERN_INFO PFX "detecting incomplete initial triplet starting "
-			"from frame %d, will discard\n", next_trf);
-		fgdev->discard_frame_start = next_trf - 1;
-	} else {
-		fgdev->discard_frame_start = 0;
-	}
 
 	spin_lock_irqsave(&fgdev->triplets_dropped_lock, flags);
 	fgdev->triplets_dropped = 0;
@@ -592,8 +579,9 @@ static void disable_transmission(struct b3dfg_dev *fgdev)
 
 	b3dfg_write32(fgdev, B3D_REG_HW_CTRL, 0);
 
-	/* reset dropped triplet counter */
-	/* FIXME will this throw away useful dma data too? */
+	/* FIXME: temporary debugging only. if the board stops transmitting,
+	 * hitting ctrl+c and seeing this message is useful for determining
+	 * the state of the board. */
 	tmp = b3dfg_read32(fgdev, B3D_REG_DMA_STS);
 	dbg("brontes DMA_STS reads %x after TX stopped\n", tmp);
 
@@ -681,15 +669,9 @@ static irqreturn_t b3dfg_intr(int irq, void *dev_id)
 			if (fgdev->cur_dma_frame_idx == B3DFG_FRAMES_PER_BUFFER - 1) {
 				/* last frame of that triplet completed */
 				dbg("triplet completed\n");
-
-				if (fgdev->discard_frame_start) {
-					fgdev->discard_frame_start = 0;
-					printk(KERN_INFO PFX "discarded incomplete triplet\n");
-				} else {
-					buf->state = B3DFG_BUFFER_POPULATED;
-					list_del_init(&buf->list);
-					wake_up_interruptible(&fgdev->buffer_waitqueue);
-				}
+				buf->state = B3DFG_BUFFER_POPULATED;
+				list_del_init(&buf->list);
+				wake_up_interruptible(&fgdev->buffer_waitqueue);
 			}
 		} else {
 			printk("got frame but no buffer!\n");
@@ -702,8 +684,7 @@ static irqreturn_t b3dfg_intr(int irq, void *dev_id)
 		buf = list_entry(fgdev->buffer_queue.next, struct b3dfg_buffer, list);
 		dbg("program DMA transfer for frame %d\n", next_trf + 1);
 		if (likely(buf)) {
-			if (!fgdev->discard_frame_start &&
-					next_trf != fgdev->cur_dma_frame_idx + 1) {
+			if (next_trf != fgdev->cur_dma_frame_idx + 1) {
 				printk("ERROR mismatch, next_trf %d vs cur_dma_frame_idx %d\n",
 					next_trf, fgdev->cur_dma_frame_idx);
 				/* FIXME this is where we should handle dropped triplets */
