@@ -156,6 +156,10 @@ static struct class *b3dfg_class;
 static dev_t b3dfg_devt;
 
 static const struct pci_device_id b3dfg_ids[] __devinitdata = {
+	{ PCI_DEVICE(0x0b3d, 0x0001) },
+
+	/* FIXME: remove this ID once all boards have been moved to 0xb3d.
+	 * this is Eureka's vendor ID that we borrowed before we bought our own. */
 	{ PCI_DEVICE(0x1901, 0x0001) },
 	{ },
 };
