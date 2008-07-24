@@ -114,6 +114,8 @@ void cmd_mmap(void)
 	if (data == MAP_FAILED) {
 		fprintf(stderr, "mmap error: %s\n", strerror(errno));
 		data = NULL;
+	} else {
+		printf("mapped buffers\n");
 	}
 }
 
@@ -126,6 +128,8 @@ void cmd_munmap(void)
 
 	if (munmap(data, 2 * IMG_SIZE * 3) != 0)
 		fprintf(stderr, "munmap error: %s\n", strerror(errno));
+	else
+		printf("unmapped buffers\n");
 
 	data = NULL;
 }
@@ -173,16 +177,19 @@ void cmd_poll(const char *arg)
 
 void cmd_wait(const char *arg)
 {
-	int res;
+	int res, count;
+	unsigned int timeout = 0;
 	struct b3dfg_wait warg;
+
+	if (sscanf(arg, " -t%u %n", &timeout, &count) > 0)
+		arg += count;
 
 	if (sscanf(arg, "%d", &warg.buffer_idx) != 1 || warg.buffer_idx < 0) {
 		printf("wait error: buffer index required\n");
 		return;
 	}
 
-	/* TODO: Allow user to specify */
-	warg.timeout = 60 * 1000;
+	warg.timeout = timeout * 1000;
 
 	if (!require_open("wait"))
 		return;
@@ -284,9 +291,10 @@ int main(int argc, char *argv[])
 			printf("queue <buffer>\tqueues a DMA buffer for receiving frames\n");
 			printf("start\t\tstart transmission\n");
 			printf("stop\t\tstop transmission\n");
-			printf("poll <buffer>\t\tpolls whether the given buffer has been filled\n");
-			printf("wait <buffer>\t\twaits for the given buffer to be filled\n");
-			printf("write r|g|b <buffer> <file>\twrite either red, green or blue channel to a file\n");
+			printf("poll <buffer>\tpolls whether the given buffer has been filled\n");
+			printf("wait [-t<timeout>] <buffer>\twaits for the given buffer to be filled\n");
+			printf("\t\t\t\tTimeout (secs) defaults to 0 (indefinite)\n");
+			printf("write r|g|b <buffer> <file>\twrite the red, green or blue channel to a file\n");
 			printf("quit\t\tquit the b3dfg utility\n");
 		} else if (strcmp(cmd, "open") == 0) {
 			cmd_open();
@@ -312,14 +320,16 @@ int main(int argc, char *argv[])
 			cmd_stop();
 		} else if (strcmp(cmd, "wand") == 0) {
 			cmd_wand();
-		} else if (strcmp(cmd, "quit") == 0) {
+		} else if (strcmp(cmd, "quit") == 0 ||
+		           strcmp(cmd, "q") == 0) {
 			free(cmd);
 			break;
-		} else {
+		} else if (cmd[0]) {
 			printf("unknown command: %s\n", cmd);
 			printf("type help for a list of commands\n");
 		}
-		add_history(cmd);
+		if (cmd[0])
+			add_history(cmd);
 		free(cmd);
 	}
 
