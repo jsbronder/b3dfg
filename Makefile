@@ -1,6 +1,6 @@
 KERNELDIR := /lib/modules/`uname -r`/build
 module := b3dfg
-PACKAGE=b3dfg-0.1
+PACKAGE=b3dfg-0.2
 
 .PHONY: module clean
 
