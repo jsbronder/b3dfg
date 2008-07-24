@@ -75,11 +75,13 @@ enum {
 	/* number of 4kb pages per frame */
 	B3D_REG_FRM_SIZE = 0x0,
 
-	/* bit 0: set to enable interrupts */
+	/* bit 0: set to enable interrupts
+	 * bit 1: set to enable cable status change interrupts */
 	B3D_REG_HW_CTRL = 0x4,
 
 	/* bit 0-1 - 1-based ID of next pending frame transfer (0 = nothing pending)
 	 * bit 2 indicates the previous DMA transfer has completed
+	 * bit 3 indicates wand cable status change
 	 * bit 8:15 - counter of number of discarded triplets */
 	B3D_REG_DMA_STS = 0x8,
 
@@ -133,6 +135,10 @@ struct b3dfg_dev {
 	int num_buffers;
 	struct b3dfg_buffer *buffers;
 	struct list_head buffer_queue;
+
+	/* cable_state_lock protected cable_state */
+	spinlock_t cstate_lock;
+	unsigned long cstate_tstamp;
 
 	wait_queue_head_t buffer_waitqueue;
 
@@ -404,12 +410,35 @@ static u8 buffer_state(struct b3dfg_dev *fgdev, struct b3dfg_buffer *buf)
 	return state;
 }
 
+static unsigned long get_cstate_change(struct b3dfg_dev *fgdev)
+{
+	unsigned long flags, when;
+
+	spin_lock_irqsave(&fgdev->cstate_lock, flags);
+	when = fgdev->cstate_tstamp;
+	spin_unlock_irqrestore(&fgdev->cstate_lock, flags);
+	return when;
+}
+
+static int is_event_ready(struct b3dfg_dev *fgdev, struct b3dfg_buffer *buf,
+	unsigned long when)
+{
+	int result;
+	unsigned long flags;
+
+	spin_lock_irqsave(&fgdev->cstate_lock, flags);
+	result = (buffer_state(fgdev, buf) == B3DFG_BUFFER_POPULATED ||
+		  when != fgdev->cstate_tstamp);
+	spin_unlock_irqrestore(&fgdev->cstate_lock, flags);
+	return result;
+}
+
 /* sleep until a specific buffer becomes populated */
 static int wait_buffer(struct b3dfg_dev *fgdev, void __user *arg)
 {
 	struct b3dfg_wait w;
 	struct b3dfg_buffer *buf;
-	unsigned long flags;
+	unsigned long flags, when;
 	int r;
 
 	if (copy_from_user(&w, arg, sizeof(w)))
@@ -436,19 +465,26 @@ static int wait_buffer(struct b3dfg_dev *fgdev, void __user *arg)
 	spin_unlock_irqrestore(&fgdev->buffer_lock, flags);
 	/* FIXME: what prevents the buffer going away at this time? */
 
+	when = get_cstate_change(fgdev);
 	if (w.timeout > 0) {
 		r = wait_event_interruptible_timeout(fgdev->buffer_waitqueue,
-			buffer_state(fgdev, buf) == B3DFG_BUFFER_POPULATED,
+			is_event_ready(fgdev, buf, when),
 			(w.timeout * HZ) / 1000);
+
 		if (unlikely(r < 0))
 			return r;
-		else if (unlikely(buffer_state(fgdev, buf)
-				!= B3DFG_BUFFER_POPULATED))
-			return -ETIMEDOUT;
+
 		w.timeout = r * 1000 / HZ;
+
+		/* TODO: Inform the user via field(s) in w? */
+		if (when != get_cstate_change(fgdev))
+			return -EINVAL;
+
+		if (buffer_state(fgdev, buf) != B3DFG_BUFFER_POPULATED)
+			return -ETIMEDOUT;
 	} else {
 		r = wait_event_interruptible(fgdev->buffer_waitqueue,
-			buffer_state(fgdev, buf) == B3DFG_BUFFER_POPULATED);
+			is_event_ready(fgdev, buf, when));
 		if (unlikely(r))
 			return -ERESTARTSYS;
 	}
@@ -538,6 +574,12 @@ static int enable_transmission(struct b3dfg_dev *fgdev)
 
 	printk(KERN_INFO PFX "enable transmission\n");
 
+	/* check the cable is plugged in. */
+	if (!b3dfg_read32(fgdev, B3D_REG_WAND_STS)) {
+		printk(KERN_ERR PFX "cannot start transmission without wand\n");
+		return -EINVAL;
+	}
+
 	/* check we're a bus master */
 	pci_read_config_word(fgdev->pdev, PCI_COMMAND, &command);
 	if (!(command & PCI_COMMAND_MASTER)) {
@@ -562,7 +604,10 @@ static int enable_transmission(struct b3dfg_dev *fgdev)
 	fgdev->triplet_ready = 0;
 	fgdev->transmission_enabled = 1;
 	fgdev->cur_dma_frame_idx = -1;
-	b3dfg_write32(fgdev, B3D_REG_HW_CTRL, 1);
+
+	/* Enable DMA and cable status interrupts. */
+	b3dfg_write32(fgdev, B3D_REG_HW_CTRL, 0x03);
+
 	return 0;
 }
 
@@ -599,6 +644,73 @@ static int set_transmission(struct b3dfg_dev *fgdev, int enabled)
 	return 0;
 }
 
+static void handle_cstate_unplug(struct b3dfg_dev *fgdev)
+{
+	/* Disable all interrupts. */
+	b3dfg_write32(fgdev, B3D_REG_HW_CTRL, 0);
+
+	/* Stop transmission. */
+	fgdev->triplet_ready = 0;
+	fgdev->transmission_enabled = 0;
+	fgdev->cur_dma_frame_idx = -1;
+	if (fgdev->cur_dma_frame_addr) {
+		dma_unmap_single(&fgdev->pdev->dev, fgdev->cur_dma_frame_addr,
+				 fgdev->frame_size, DMA_FROM_DEVICE);
+		fgdev->cur_dma_frame_addr = 0;
+	}
+
+	/* Dequeue all buffers. */
+	spin_lock(&fgdev->buffer_lock);
+	dequeue_all_buffers(fgdev);
+	spin_unlock(&fgdev->buffer_lock);
+}
+
+
+static void handle_cstate_change(struct b3dfg_dev *fgdev)
+{
+	u32 cstate = b3dfg_read32(fgdev, B3D_REG_WAND_STS);
+	unsigned long when;
+
+	dbg("cable state change: %u\n", cstate);
+
+	/*
+	 * When the wand is unplugged we reset our state. The hardware will
+	 * have done the same internally.
+	 *
+	 * Note we should never see a cable *plugged* event, as interrupts
+	 * should only be enabled when transmitting, which requires the cable
+	 * to be plugged. If we do see one it probably means the cable has been
+	 * unplugged and re-plugged very rapidly. Possibly because it has a
+	 * broken wire and is momentarily losing contact.
+	 *
+	 * TODO: At the moment if you plug in the cable then enable transmission
+	 *       the hardware will raise a couple of spurious interrupts, so
+	 *       just ignore them for now.
+	 *
+	 *      Once the hardware is fixed we should complain and treat it as an
+	 *      unplug. Or at least track how frequently it is happening and do
+	 *      so if too many come in.
+	 */
+	if (cstate) {
+		printk(KERN_WARNING PFX "ignoring unexpected plug event\n");
+		return;
+	}
+	handle_cstate_unplug(fgdev);
+
+	/*
+	 * Record cable state change timestamp & wake anyone waiting
+	 * on a cable state change. Be paranoid about ensuring events
+	 * are not missed if we somehow get two interrupts in a jiffy.
+	 */
+	spin_lock(&fgdev->cstate_lock);
+	when = jiffies_64;
+	if (when <= fgdev->cstate_tstamp)
+		when = fgdev->cstate_tstamp + 1;
+	fgdev->cstate_tstamp = when;
+	wake_up_interruptible(&fgdev->buffer_waitqueue);
+	spin_unlock(&fgdev->cstate_lock);
+}
+
 static irqreturn_t b3dfg_intr(int irq, void *dev_id)
 {
 	struct b3dfg_dev *fgdev = dev_id;
@@ -610,15 +722,15 @@ static irqreturn_t b3dfg_intr(int irq, void *dev_id)
 	int next_trf;
 	int need_ack = 1;
 
-	if (unlikely(!fgdev->transmission_enabled)) {
-		printk("ignore interrupt, TX disabled\n");
+	sts = b3dfg_read32(fgdev, B3D_REG_DMA_STS);
+	if (unlikely(sts == 0)) {
+		printk(KERN_INFO PFX "ignore interrupt, DMA status is 0\n");
 		/* FIXME should return IRQ_NONE when we are stable */
 		goto out;
 	}
 
-	sts = b3dfg_read32(fgdev, B3D_REG_DMA_STS);
-	if (unlikely(sts == 0)) {
-		printk("ignore interrupt, brontes DMA status is 0\n");
+	if (unlikely(!fgdev->transmission_enabled)) {
+		printk(KERN_INFO PFX "ignore interrupt, TX disabled\n");
 		/* FIXME should return IRQ_NONE when we are stable */
 		goto out;
 	}
@@ -630,6 +742,12 @@ static irqreturn_t b3dfg_intr(int irq, void *dev_id)
 		spin_lock(&fgdev->triplets_dropped_lock);
 		fgdev->triplets_dropped += dropped;
 		spin_unlock(&fgdev->triplets_dropped_lock);
+	}
+
+	/* Handle a cable state change (i.e. the wand being unplugged). */
+	if (sts & 0x08) {
+		handle_cstate_change(fgdev);
+		goto out;
 	}
 
 	dev = &fgdev->pdev->dev;
@@ -662,6 +780,7 @@ static irqreturn_t b3dfg_intr(int irq, void *dev_id)
 		}
 		dma_unmap_single(dev, fgdev->cur_dma_frame_addr, frame_size,
 			DMA_FROM_DEVICE);
+		fgdev->cur_dma_frame_addr = 0;
 
 		buf = list_entry(fgdev->buffer_queue.next, struct b3dfg_buffer, list);
 		if (likely(buf)) {
@@ -765,7 +884,7 @@ static long b3dfg_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 static unsigned int b3dfg_poll(struct file *filp, poll_table *poll_table)
 {
 	struct b3dfg_dev *fgdev = filp->private_data;
-	unsigned long flags;
+	unsigned long flags, when;
 	int i;
 	int r = 0;
 
@@ -778,6 +897,7 @@ static unsigned int b3dfg_poll(struct file *filp, poll_table *poll_table)
 		goto out;
 	}
 
+	when = get_cstate_change(fgdev);
 	poll_wait(filp, &fgdev->buffer_waitqueue, poll_table);
 	spin_lock_irqsave(&fgdev->buffer_lock, flags);
 	for (i = 0; i < fgdev->num_buffers; i++) {
@@ -789,6 +909,11 @@ static unsigned int b3dfg_poll(struct file *filp, poll_table *poll_table)
 
 out_buffer_unlock:
 	spin_unlock_irqrestore(&fgdev->buffer_lock, flags);
+
+	/* TODO: Confirm this is how we want to communicate the change. */
+	if (when != get_cstate_change(fgdev))
+		r = POLLERR;
+
 out:
 	mutex_unlock(&fgdev->ioctl_mutex);
 	return r;
@@ -872,6 +997,7 @@ static int b3dfg_init_dev(struct b3dfg_dev *fgdev)
 	INIT_LIST_HEAD(&fgdev->buffer_queue);
 	init_waitqueue_head(&fgdev->buffer_waitqueue);
 	spin_lock_init(&fgdev->buffer_lock);
+	spin_lock_init(&fgdev->cstate_lock);
 	spin_lock_init(&fgdev->triplets_dropped_lock);
 	atomic_set(&fgdev->mapping_count, 0);
 	mutex_init(&fgdev->ioctl_mutex);
