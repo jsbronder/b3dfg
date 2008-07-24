@@ -1,5 +1,6 @@
 KERNELDIR := /lib/modules/`uname -r`/build
 module := b3dfg
+PACKAGE=b3dfg-0.1
 
 .PHONY: module clean
 
@@ -11,4 +12,11 @@ nodebug:
 
 clean:
 	make -C $(KERNELDIR) M=`pwd` $@
+
+dist:
+	mkdir $(PACKAGE)
+	cp Makefile *.c Kbuild $(PACKAGE)
+	sed -i -e 's/B3DFG_DEBUG=y//g' $(PACKAGE)/Makefile
+	tar -cjf $(PACKAGE).tar.bz2 $(PACKAGE)
+	rm -rf $(PACKAGE)
 
