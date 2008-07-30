@@ -458,7 +458,7 @@ static int wait_buffer(struct b3dfg_dev *fgdev, void __user *arg)
 	}
 
 	if (buf->state == B3DFG_BUFFER_POPULATED) {
-		r = 0;
+		r = w.timeout;
 		goto out_triplets_dropped;
 	}
 
