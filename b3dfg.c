@@ -1092,6 +1092,12 @@ static int __devinit b3dfg_probe(struct pci_dev *pdev,
 
 	pci_set_master(pdev);
 
+	r = pci_set_dma_mask(pdev, DMA_32BIT_MASK);
+	if (r) {
+		dev_err(&pdev->dev, "no usable DMA configuration\n");
+		goto err_free_res;
+	}
+
 	res_base = pci_resource_start(pdev, B3DFG_BAR_REGS);
 	fgdev->regs = ioremap_nocache(res_base, res_len);
 	if (!fgdev->regs) {
