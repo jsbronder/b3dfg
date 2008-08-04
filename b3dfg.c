@@ -62,14 +62,14 @@
 #define B3DFG_BAR_REGS	0
 #define B3DFG_REGS_LENGTH 0x10000
 
-#define B3DFG_IOC_MAGIC			0xb3 /* dfg :-) */
-#define B3DFG_IOCGFRMSZ			_IOR(B3DFG_IOC_MAGIC, 1, int)
-#define B3DFG_IOCTNUMBUFS		_IO(B3DFG_IOC_MAGIC, 2)
-#define B3DFG_IOCTTRANS			_IO(B3DFG_IOC_MAGIC, 3)
-#define B3DFG_IOCTQUEUEBUF		_IO(B3DFG_IOC_MAGIC, 4)
-#define B3DFG_IOCTPOLLBUF		_IOWR(B3DFG_IOC_MAGIC, 5, struct b3dfg_poll)
-#define B3DFG_IOCTWAITBUF		_IOWR(B3DFG_IOC_MAGIC, 6, struct b3dfg_wait)
-#define B3DFG_IOCGWANDSTAT		_IOR(B3DFG_IOC_MAGIC, 7, int)
+#define B3DFG_IOC_MAGIC		0xb3 /* dfg :-) */
+#define B3DFG_IOCGFRMSZ		_IOR(B3DFG_IOC_MAGIC, 1, int)
+#define B3DFG_IOCTNUMBUFS	_IO(B3DFG_IOC_MAGIC, 2)
+#define B3DFG_IOCTTRANS		_IO(B3DFG_IOC_MAGIC, 3)
+#define B3DFG_IOCTQUEUEBUF	_IO(B3DFG_IOC_MAGIC, 4)
+#define B3DFG_IOCTPOLLBUF	_IOWR(B3DFG_IOC_MAGIC, 5, struct b3dfg_poll)
+#define B3DFG_IOCTWAITBUF	_IOWR(B3DFG_IOC_MAGIC, 6, struct b3dfg_wait)
+#define B3DFG_IOCGWANDSTAT	_IOR(B3DFG_IOC_MAGIC, 7, int)
 
 enum {
 	/* number of 4kb pages per frame */
@@ -79,7 +79,7 @@ enum {
 	 * bit 1: set to enable cable status change interrupts */
 	B3D_REG_HW_CTRL = 0x4,
 
-	/* bit 0-1 - 1-based ID of next pending frame transfer (0 = nothing pending)
+	/* bit 0-1 - 1-based ID of next pending frame transfer (0 = none)
 	 * bit 2 indicates the previous DMA transfer has completed
 	 * bit 3 indicates wand cable status change
 	 * bit 8:15 - counter of number of discarded triplets */
@@ -119,8 +119,8 @@ struct b3dfg_buffer {
 struct b3dfg_dev {
 	/* no protection needed: all finalized at initialization time */
 	struct pci_dev *pdev;
-    struct cdev chardev;
-    struct class_device *classdev;
+	struct cdev chardev;
+	struct class_device *classdev;
 	void __iomem *regs;
 	unsigned int frame_size;
 
@@ -165,7 +165,7 @@ static const struct pci_device_id b3dfg_ids[] __devinitdata = {
 	{ PCI_DEVICE(0x0b3d, 0x0001) },
 
 	/* FIXME: remove this ID once all boards have been moved to 0xb3d.
-	 * this is Eureka's vendor ID that we borrowed before we bought our own. */
+	 * Eureka's vendor ID that we borrowed before we bought our own. */
 	{ PCI_DEVICE(0x1901, 0x0001) },
 	{ },
 };
@@ -204,16 +204,16 @@ static void setup_frame_transfer(struct b3dfg_dev *fgdev,
 	unsigned char *frm_addr;
 	dma_addr_t frm_addr_dma;
 	struct device *dev = &fgdev->pdev->dev;
-	unsigned int frame_size = fgdev->frame_size;
+	unsigned int frm_size = fgdev->frame_size;
 	unsigned char dma_sts = 0xd;
 
 	frm_addr = buf->frame[frame];
-	frm_addr_dma = dma_map_single(dev, frm_addr, frame_size, DMA_FROM_DEVICE);
+	frm_addr_dma = dma_map_single(dev, frm_addr, frm_size, DMA_FROM_DEVICE);
 	fgdev->cur_dma_frame_addr = frm_addr_dma;
 	fgdev->cur_dma_frame_idx = frame;
 
 	b3dfg_write32(fgdev, B3D_REG_EC220_DMA_ADDR, cpu_to_le32(frm_addr_dma));
-	b3dfg_write32(fgdev, B3D_REG_EC220_TRF_SIZE, cpu_to_le32(frame_size >> 2));
+	b3dfg_write32(fgdev, B3D_REG_EC220_TRF_SIZE, cpu_to_le32(frm_size >> 2));
 
 	if (likely(acknowledge))
 		dma_sts |= 0x2;
@@ -760,7 +760,7 @@ static irqreturn_t b3dfg_intr(int irq, void *dev_id)
 		fgdev->triplet_ready = 1;
 		goto out_unlock;
 	}
-	
+
 	next_trf = sts & 0x3;
 
 	if (sts & 0x4) {
@@ -774,7 +774,7 @@ static irqreturn_t b3dfg_intr(int irq, void *dev_id)
 			goto out_unlock;
 		}
 		if (unlikely(fgdev->cur_dma_frame_idx == -1)) {
-			printk("ERROR completed but no last idx?\n");
+			printk(KERN_ERR PFX "ERROR completed but no last idx?\n");
 			/* FIXME flesh out error handling */
 			goto out_unlock;
 		}
@@ -782,7 +782,8 @@ static irqreturn_t b3dfg_intr(int irq, void *dev_id)
 			DMA_FROM_DEVICE);
 		fgdev->cur_dma_frame_addr = 0;
 
-		buf = list_entry(fgdev->buffer_queue.next, struct b3dfg_buffer, list);
+		buf = list_entry(fgdev->buffer_queue.next,
+				 struct b3dfg_buffer, list);
 		if (likely(buf)) {
 			dbg("handle frame completion\n");
 			if (fgdev->cur_dma_frame_idx == B3DFG_FRAMES_PER_BUFFER - 1) {
@@ -793,26 +794,28 @@ static irqreturn_t b3dfg_intr(int irq, void *dev_id)
 				wake_up_interruptible(&fgdev->buffer_waitqueue);
 			}
 		} else {
-			printk("got frame but no buffer!\n");
+			printk(KERN_ERR PFX "got frame but no buffer!\n");
 		}
 	}
 
 	if (next_trf) {
 		next_trf--;
 
-		buf = list_entry(fgdev->buffer_queue.next, struct b3dfg_buffer, list);
+		buf = list_entry(fgdev->buffer_queue.next,
+				 struct b3dfg_buffer, list);
 		dbg("program DMA transfer for frame %d\n", next_trf + 1);
 		if (likely(buf)) {
 			if (next_trf != fgdev->cur_dma_frame_idx + 1) {
-				printk("ERROR mismatch, next_trf %d vs cur_dma_frame_idx %d\n",
-					next_trf, fgdev->cur_dma_frame_idx);
-				/* FIXME this is where we should handle dropped triplets */
+				printk(KERN_ERR PFX
+				       "ERROR mismatch, next_trf %d vs cur_dma_frame_idx %d\n",
+				       next_trf, fgdev->cur_dma_frame_idx);
+				/* FIXME we should handle dropped triplets here */
 				goto out_unlock;
 			}
 			setup_frame_transfer(fgdev, buf, next_trf, 1);
 			need_ack = 0;
 		} else {
-			printk("cannot setup next DMA due to no buffer\n");
+			printk(KERN_ERR PFX "cannot setup next DMA due to no buffer\n");
 		}
 	} else {
 		fgdev->cur_dma_frame_idx = -1;
@@ -979,12 +982,14 @@ static int b3dfg_init_dev(struct b3dfg_dev *fgdev)
 	int i;
 	u32 frm_size = b3dfg_read32(fgdev, B3D_REG_FRM_SIZE);
 
-	/* disable interrupts. in abnormal circumstances (e.g. after a crash) the
-	 * board may still be transmitting from the previous session. if we ensure
-	 * that interrupts are disabled before we later enable them, we are sure
-	 * to capture a triplet from the start, rather than starting from frame
-	 * 2 or 3. disabling interrupts causes the FG to throw away all buffered
-	 * data and stop buffering more until interrupts are enabled again. */
+	/* Disable interrupts. In abnormal circumstances (e.g. after a crash)
+	 * the board may still be transmitting from the previous session. If we
+	 * ensure that interrupts are disabled before we later enable them, we
+	 * are sure to capture a triplet from the start, rather than starting
+	 * from frame 2 or 3. Disabling interrupts causes the FG to throw away
+	 * all buffered data and stop buffering more until interrupts are
+	 * enabled again.
+	 */
 	b3dfg_write32(fgdev, B3D_REG_HW_CTRL, 0);
 
 	fgdev->frame_size = frm_size * 4096;
@@ -1046,8 +1051,9 @@ static int __devinit b3dfg_probe(struct pci_dev *pdev,
 	if (r)
 		goto err1;
 
-	fgdev->classdev = class_device_create(b3dfg_class, NULL, devno, &pdev->dev,
-		DRIVER_NAME "%d", minor);
+	fgdev->classdev = class_device_create(b3dfg_class, NULL, devno,
+					      &pdev->dev, DRIVER_NAME "%d",
+					      minor);
 	if (IS_ERR(fgdev->classdev)) {
 		r = PTR_ERR(fgdev->classdev);
 		goto err2;
@@ -1056,7 +1062,7 @@ static int __devinit b3dfg_probe(struct pci_dev *pdev,
 	r = pci_enable_device(pdev);
 	if (r)
 		goto err3;
-	
+
 	if (pci_resource_len(pdev, B3DFG_BAR_REGS) != B3DFG_REGS_LENGTH) {
 		printk(KERN_ERR PFX "invalid register resource size\n");
 		goto err4;
