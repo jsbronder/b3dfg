@@ -218,7 +218,7 @@ static void setup_frame_transfer(struct b3dfg_dev *fgdev,
 static inline struct b3dfg_buffer *buffer_from_idx(struct b3dfg_dev *fgdev,
 	int idx)
 {
-	if (unlikely(idx >= fgdev->num_buffers))
+	if (unlikely(idx < 0 || idx >= fgdev->num_buffers))
 		return NULL;
 	return &fgdev->buffers[idx];
 }
