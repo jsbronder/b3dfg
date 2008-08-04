@@ -1028,6 +1028,8 @@ static int __devinit b3dfg_probe(struct pci_dev *pdev,
 	int r = 0;
 	int minor = get_free_minor();
 	dev_t devno = MKDEV(MAJOR(b3dfg_devt), minor);
+	unsigned long res_len;
+	resource_size_t res_base;
 
 	if (fgdev == NULL)
 		return -ENOMEM;
@@ -1065,7 +1067,8 @@ static int __devinit b3dfg_probe(struct pci_dev *pdev,
 		goto err_dev_unreg;
 	}
 
-	if (pci_resource_len(pdev, B3DFG_BAR_REGS) != B3DFG_REGS_LENGTH) {
+	res_len = pci_resource_len(pdev, B3DFG_BAR_REGS);
+	if (res_len != B3DFG_REGS_LENGTH) {
 		dev_err(&pdev->dev, "invalid register resource size\n");
 		r = -EIO;
 		goto err_disable;
@@ -1077,14 +1080,20 @@ static int __devinit b3dfg_probe(struct pci_dev *pdev,
 		goto err_disable;
 	}
 
+	r = pci_request_regions(pdev, DRIVER_NAME);
+	if (r) {
+		dev_err(&pdev->dev, "cannot obtain PCI resources\n");
+		goto err_disable;
+	}
+
 	pci_set_master(pdev);
 
-	fgdev->regs = ioremap_nocache(pci_resource_start(pdev, B3DFG_BAR_REGS),
-		B3DFG_REGS_LENGTH);
+	res_base = pci_resource_start(pdev, B3DFG_BAR_REGS);
+	fgdev->regs = ioremap_nocache(res_base, res_len);
 	if (!fgdev->regs) {
 		dev_err(&pdev->dev, "regs ioremap failed\n");
 		r = -EIO;
-		goto err_disable;
+		goto err_free_res;
 	}
 
 	fgdev->pdev = pdev;
@@ -1107,6 +1116,8 @@ err_free_bufs:
 	free_all_frame_buffers(fgdev);
 err_unmap:
 	iounmap(fgdev->regs);
+err_free_res:
+	pci_release_regions(pdev);
 err_disable:
 	pci_disable_device(pdev);
 err_dev_unreg:
@@ -1129,6 +1140,7 @@ static void __devexit b3dfg_remove(struct pci_dev *pdev)
 
 	free_irq(pdev->irq, fgdev);
 	iounmap(fgdev->regs);
+	pci_release_regions(pdev);
 	pci_disable_device(pdev);
 	class_device_unregister(fgdev->classdev);
 	cdev_del(&fgdev->chardev);
