@@ -191,17 +191,20 @@ static void b3dfg_write32(struct b3dfg_dev *fgdev, u16 reg, u32 value)
 /**** buffer management ****/
 
 /* program EC220 for transfer of a specific frame */
-static void setup_frame_transfer(struct b3dfg_dev *fgdev,
+static int setup_frame_transfer(struct b3dfg_dev *fgdev,
 	struct b3dfg_buffer *buf, int frame, int acknowledge)
 {
 	unsigned char *frm_addr;
 	dma_addr_t frm_addr_dma;
-	struct device *dev = &fgdev->pdev->dev;
 	unsigned int frm_size = fgdev->frame_size;
 	unsigned char dma_sts = 0xd;
 
 	frm_addr = buf->frame[frame];
-	frm_addr_dma = dma_map_single(dev, frm_addr, frm_size, DMA_FROM_DEVICE);
+	frm_addr_dma = pci_map_single(fgdev->pdev, frm_addr,
+				      frm_size, PCI_DMA_FROMDEVICE);
+	if (pci_dma_mapping_error(frm_addr_dma))
+		return -ENOMEM;
+
 	fgdev->cur_dma_frame_addr = frm_addr_dma;
 	fgdev->cur_dma_frame_idx = frame;
 
@@ -211,6 +214,8 @@ static void setup_frame_transfer(struct b3dfg_dev *fgdev,
 	if (likely(acknowledge))
 		dma_sts |= 0x2;
 	b3dfg_write32(fgdev, B3D_REG_EC220_DMA_STS, 0xf);
+
+	return 0;
 }
 
 /* retrieve a buffer pointer from a buffer index. also checks that the
@@ -339,7 +344,9 @@ static int queue_buffer(struct b3dfg_dev *fgdev, int bufidx)
 	if (fgdev->transmission_enabled && fgdev->triplet_ready) {
 		dev_dbg(dev, "triplet is ready, pushing immediately\n");
 		fgdev->triplet_ready = 0;
-		setup_frame_transfer(fgdev, buf, 0, 0);
+		r = setup_frame_transfer(fgdev, buf, 0, 0);
+		if (r)
+			dev_err(dev, "unable to map DMA buffer\n");
 	}
 
 out:
@@ -648,8 +655,8 @@ static void handle_cstate_unplug(struct b3dfg_dev *fgdev)
 	fgdev->transmission_enabled = 0;
 	fgdev->cur_dma_frame_idx = -1;
 	if (fgdev->cur_dma_frame_addr) {
-		dma_unmap_single(&fgdev->pdev->dev, fgdev->cur_dma_frame_addr,
-				 fgdev->frame_size, DMA_FROM_DEVICE);
+		pci_unmap_single(fgdev->pdev, fgdev->cur_dma_frame_addr,
+				 fgdev->frame_size, PCI_DMA_FROMDEVICE);
 		fgdev->cur_dma_frame_addr = 0;
 	}
 
@@ -773,8 +780,8 @@ static irqreturn_t b3dfg_intr(int irq, void *dev_id)
 			/* FIXME flesh out error handling */
 			goto out_unlock;
 		}
-		dma_unmap_single(dev, fgdev->cur_dma_frame_addr, frame_size,
-			DMA_FROM_DEVICE);
+		pci_unmap_single(fgdev->pdev, fgdev->cur_dma_frame_addr,
+				 frame_size, PCI_DMA_FROMDEVICE);
 		fgdev->cur_dma_frame_addr = 0;
 
 		buf = list_entry(fgdev->buffer_queue.next,
@@ -808,7 +815,8 @@ static irqreturn_t b3dfg_intr(int irq, void *dev_id)
 				/* FIXME handle dropped triplets here */
 				goto out_unlock;
 			}
-			setup_frame_transfer(fgdev, buf, next_trf, 1);
+			if (setup_frame_transfer(fgdev, buf, next_trf, 1))
+				dev_err(dev, "unable to map DMA buffer\n");
 			need_ack = 0;
 		} else {
 			dev_err(dev, "cannot setup DMA, no buffer\n");
