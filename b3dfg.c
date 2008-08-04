@@ -192,12 +192,11 @@ static void b3dfg_write32(struct b3dfg_dev *fgdev, u16 reg, u32 value)
 
 /* program EC220 for transfer of a specific frame */
 static int setup_frame_transfer(struct b3dfg_dev *fgdev,
-	struct b3dfg_buffer *buf, int frame, int acknowledge)
+	struct b3dfg_buffer *buf, int frame)
 {
 	unsigned char *frm_addr;
 	dma_addr_t frm_addr_dma;
 	unsigned int frm_size = fgdev->frame_size;
-	unsigned char dma_sts = 0xd;
 
 	frm_addr = buf->frame[frame];
 	frm_addr_dma = pci_map_single(fgdev->pdev, frm_addr,
@@ -210,9 +209,6 @@ static int setup_frame_transfer(struct b3dfg_dev *fgdev,
 
 	b3dfg_write32(fgdev, B3D_REG_EC220_DMA_ADDR, cpu_to_le32(frm_addr_dma));
 	b3dfg_write32(fgdev, B3D_REG_EC220_TRF_SIZE, cpu_to_le32(frm_size >> 2));
-
-	if (likely(acknowledge))
-		dma_sts |= 0x2;
 	b3dfg_write32(fgdev, B3D_REG_EC220_DMA_STS, 0xf);
 
 	return 0;
@@ -344,7 +340,7 @@ static int queue_buffer(struct b3dfg_dev *fgdev, int bufidx)
 	if (fgdev->transmission_enabled && fgdev->triplet_ready) {
 		dev_dbg(dev, "triplet is ready, pushing immediately\n");
 		fgdev->triplet_ready = 0;
-		r = setup_frame_transfer(fgdev, buf, 0, 0);
+		r = setup_frame_transfer(fgdev, buf, 0);
 		if (r)
 			dev_err(dev, "unable to map DMA buffer\n");
 	}
@@ -815,7 +811,7 @@ static irqreturn_t b3dfg_intr(int irq, void *dev_id)
 				/* FIXME handle dropped triplets here */
 				goto out_unlock;
 			}
-			if (setup_frame_transfer(fgdev, buf, next_trf, 1))
+			if (setup_frame_transfer(fgdev, buf, next_trf))
 				dev_err(dev, "unable to map DMA buffer\n");
 			need_ack = 0;
 		} else {
