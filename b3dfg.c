@@ -571,11 +571,13 @@ static int enable_transmission(struct b3dfg_dev *fgdev)
 		return -EINVAL;
 	}
 
-	/* check we're a bus master */
+	/*
+	 * Check we're a bus master.
+	 * TODO: I think we can remove this having added the pci_set_master call
+	 */
 	pci_read_config_word(fgdev->pdev, PCI_COMMAND, &command);
 	if (!(command & PCI_COMMAND_MASTER)) {
-		dev_warn(dev, "not a bus master, force-enabling\n");
-		/* FIXME: why did we lose it in the first place? */
+		dev_err(dev, "not a bus master, force-enabling\n");
 		pci_write_config_word(fgdev->pdev, PCI_COMMAND,
 			command | PCI_COMMAND_MASTER);
 	}
@@ -1067,6 +1069,8 @@ static int __devinit b3dfg_probe(struct pci_dev *pdev,
 		dev_err(&pdev->dev, "invalid resource flags");
 		goto err4;
 	}
+
+	pci_set_master(pdev);
 
 	fgdev->regs = ioremap_nocache(pci_resource_start(pdev, B3DFG_BAR_REGS),
 		B3DFG_REGS_LENGTH);
