@@ -372,11 +372,6 @@ static int poll_buffer(struct b3dfg_dev *fgdev, void __user *arg)
 		goto out;
 	}
 
-	if (buf->state != B3DFG_BUFFER_POPULATED) {
-		r = 0;
-		goto out;
-	}
-
 	if (likely(buf->state == B3DFG_BUFFER_POPULATED)) {
 		buf->state = B3DFG_BUFFER_POLLED;
 		spin_lock(&fgdev->triplets_dropped_lock);
@@ -385,6 +380,8 @@ static int poll_buffer(struct b3dfg_dev *fgdev, void __user *arg)
 		spin_unlock(&fgdev->triplets_dropped_lock);
 		if (copy_to_user(arg, &p, sizeof(p)))
 			r = -EFAULT;
+	} else {
+		r = 0;
 	}
 
 out:
@@ -1106,8 +1103,7 @@ err2:
 	cdev_del(&fgdev->chardev);
 err1:
 	kfree(fgdev);
-	if (minor >= 0)
-		b3dfg_devices[minor] = 0;
+	b3dfg_devices[minor] = 0;
 	return r;
 }
 
