@@ -1034,40 +1034,47 @@ static int __devinit b3dfg_probe(struct pci_dev *pdev,
 
 	if (minor < 0) {
 		dev_err(&pdev->dev, "too many devices found!\n");
-		return -EIO;
+		r = -EIO;
+		goto err_free;
 	}
 
 	b3dfg_devices[minor] = 1;
-	dev_info(&pdev->dev, "probe device at %s with IRQ %d\n",
-		 pci_name(pdev), pdev->irq);
+	dev_info(&pdev->dev, "probe device with IRQ %d\n", pdev->irq);
 
 	cdev_init(&fgdev->chardev, &b3dfg_fops);
 	fgdev->chardev.owner = THIS_MODULE;
 
 	r = cdev_add(&fgdev->chardev, devno, 1);
-	if (r)
-		goto err1;
+	if (r) {
+		dev_err(&pdev->dev, "cannot add char device\n");
+		goto err_release_minor;
+	}
 
 	fgdev->classdev = class_device_create(b3dfg_class, NULL, devno,
 					      &pdev->dev, DRIVER_NAME "%d",
 					      minor);
 	if (IS_ERR(fgdev->classdev)) {
+		dev_err(&pdev->dev, "cannot create class device\n");
 		r = PTR_ERR(fgdev->classdev);
-		goto err2;
+		goto err_del_cdev;
 	}
 
 	r = pci_enable_device(pdev);
-	if (r)
-		goto err3;
+	if (r) {
+		dev_err(&pdev->dev, "cannot enable PCI device\n");
+		goto err_dev_unreg;
+	}
 
 	if (pci_resource_len(pdev, B3DFG_BAR_REGS) != B3DFG_REGS_LENGTH) {
 		dev_err(&pdev->dev, "invalid register resource size\n");
-		goto err4;
+		r = -EIO;
+		goto err_disable;
 	}
 
 	if (pci_resource_flags(pdev, B3DFG_BAR_REGS) != IORESOURCE_MEM) {
-		dev_err(&pdev->dev, "invalid resource flags");
-		goto err4;
+		dev_err(&pdev->dev, "invalid resource flags\n");
+		r = -EIO;
+		goto err_disable;
 	}
 
 	pci_set_master(pdev);
@@ -1076,7 +1083,8 @@ static int __devinit b3dfg_probe(struct pci_dev *pdev,
 		B3DFG_REGS_LENGTH);
 	if (!fgdev->regs) {
 		dev_err(&pdev->dev, "regs ioremap failed\n");
-		goto err4;
+		r = -EIO;
+		goto err_disable;
 	}
 
 	fgdev->pdev = pdev;
@@ -1084,30 +1092,31 @@ static int __devinit b3dfg_probe(struct pci_dev *pdev,
 	r = b3dfg_init_dev(fgdev);
 	if (r < 0) {
 		dev_err(&pdev->dev, "failed to initalize device\n");
-		goto err5;
+		goto err_unmap;
 	}
 
 	r = request_irq(pdev->irq, b3dfg_intr, IRQF_SHARED, DRIVER_NAME, fgdev);
 	if (r) {
 		dev_err(&pdev->dev, "couldn't request irq %d\n", pdev->irq);
-		goto err6;
+		goto err_free_bufs;
 	}
 
 	return 0;
 
-err6:
+err_free_bufs:
 	free_all_frame_buffers(fgdev);
-err5:
+err_unmap:
 	iounmap(fgdev->regs);
-err4:
+err_disable:
 	pci_disable_device(pdev);
-err3:
+err_dev_unreg:
 	class_device_unregister(fgdev->classdev);
-err2:
+err_del_cdev:
 	cdev_del(&fgdev->chardev);
-err1:
-	kfree(fgdev);
+err_release_minor:
 	b3dfg_devices[minor] = 0;
+err_free:
+	kfree(fgdev);
 	return r;
 }
 
