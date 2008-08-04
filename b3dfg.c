@@ -1128,7 +1128,7 @@ static struct pci_driver b3dfg_driver = {
 	.name = DRIVER_NAME,
 	.id_table = b3dfg_ids,
 	.probe = b3dfg_probe,
-	.remove = b3dfg_remove,
+	.remove = __devexit_p(b3dfg_remove),
 };
 
 static int __init b3dfg_module_init(void)
