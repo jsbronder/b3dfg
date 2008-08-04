@@ -46,14 +46,7 @@
  * review endianness
  */
 
-#ifdef DEBUG
-#define dbg(msg...) printk(msg)
-#else
-#define dbg(msg...)
-#endif
-
 #define DRIVER_NAME "b3dfg"
-#define PFX DRIVER_NAME ": "
 #define B3DFG_MAX_DEVS 4
 #define B3DFG_NR_TRIPLET_BUFFERS 4
 #define B3DFG_NR_FRAME_BUFFERS (B3DFG_NR_TRIPLET_BUFFERS * 3)
@@ -266,24 +259,23 @@ static void init_buffer(struct b3dfg_dev *fgdev, struct b3dfg_buffer *buf,
 static int set_num_buffers(struct b3dfg_dev *fgdev, int num_buffers)
 {
 	int i;
+	struct device *dev = &fgdev->pdev->dev;
 	struct b3dfg_buffer *buffers;
 	unsigned long flags;
 
-	printk(KERN_INFO PFX "set %d buffers\n", num_buffers);
+	dev_dbg(dev, "set %d buffers\n", num_buffers);
 	if (fgdev->transmission_enabled) {
-		printk(KERN_ERR PFX
-			"cannot set buffer count while transmission is enabled\n");
+		dev_dbg(dev, "cannot set buffer count, transmission enabled\n");
 		return -EBUSY;
 	}
 
 	if (atomic_read(&fgdev->mapping_count) > 0) {
-		printk(KERN_ERR PFX
-			"cannot set buffer count while memory mappings are active\n");
+		dev_dbg(dev, "cannot set buffer count, memory mapped\n");
 		return -EBUSY;
 	}
 
 	if (num_buffers > B3DFG_NR_TRIPLET_BUFFERS) {
-		printk(KERN_ERR PFX "limited to %d triplet buffers\n",
+		dev_dbg(dev, "limited to %d triplet buffers\n",
 			B3DFG_NR_TRIPLET_BUFFERS);
 		return -E2BIG;
 	}
@@ -323,6 +315,7 @@ static int set_num_buffers(struct b3dfg_dev *fgdev, int num_buffers)
 /* queue a buffer to receive data */
 static int queue_buffer(struct b3dfg_dev *fgdev, int bufidx)
 {
+	struct device *dev = &fgdev->pdev->dev;
 	struct b3dfg_buffer *buf;
 	unsigned long flags;
 	int r = 0;
@@ -335,7 +328,7 @@ static int queue_buffer(struct b3dfg_dev *fgdev, int bufidx)
 	}
 
 	if (unlikely(buf->state == B3DFG_BUFFER_PENDING)) {
-		printk(KERN_ERR PFX "buffer %d is already queued", bufidx);
+		dev_dbg(dev, "buffer %d is already queued\n", bufidx);
 		r = -EINVAL;
 		goto out;
 	}
@@ -344,7 +337,7 @@ static int queue_buffer(struct b3dfg_dev *fgdev, int bufidx)
 	list_add_tail(&buf->list, &fgdev->buffer_queue);
 
 	if (fgdev->transmission_enabled && fgdev->triplet_ready) {
-		dbg("triplet is ready, so pushing immediately\n");
+		dev_dbg(dev, "triplet is ready, pushing immediately\n");
 		fgdev->triplet_ready = 0;
 		setup_frame_transfer(fgdev, buf, 0, 0);
 	}
@@ -358,6 +351,7 @@ out:
  * 0 otherwise */
 static int poll_buffer(struct b3dfg_dev *fgdev, void __user *arg)
 {
+	struct device *dev = &fgdev->pdev->dev;
 	struct b3dfg_poll p;
 	struct b3dfg_buffer *buf;
 	unsigned long flags;
@@ -367,8 +361,7 @@ static int poll_buffer(struct b3dfg_dev *fgdev, void __user *arg)
 		return -EFAULT;
 
 	if (unlikely(!fgdev->transmission_enabled)) {
-		printk(KERN_ERR PFX
-			"cannot poll buffers when transmission is disabled\n");
+		dev_dbg(dev, "cannot poll, transmission disabled\n");
 		return -EINVAL;
 	}
 
@@ -436,6 +429,7 @@ static int is_event_ready(struct b3dfg_dev *fgdev, struct b3dfg_buffer *buf,
 /* sleep until a specific buffer becomes populated */
 static int wait_buffer(struct b3dfg_dev *fgdev, void __user *arg)
 {
+	struct device *dev = &fgdev->pdev->dev;
 	struct b3dfg_wait w;
 	struct b3dfg_buffer *buf;
 	unsigned long flags, when;
@@ -445,8 +439,7 @@ static int wait_buffer(struct b3dfg_dev *fgdev, void __user *arg)
 		return -EFAULT;
 
 	if (unlikely(!fgdev->transmission_enabled)) {
-		printk(KERN_ERR PFX
-			"cannot wait on buffers when transmission is disabled\n");
+		dev_dbg(dev, "cannot wait, transmission disabled\n");
 		return -EINVAL;
 	}
 
@@ -563,7 +556,7 @@ static struct vm_operations_struct b3dfg_vm_ops = {
 static int get_wand_status(struct b3dfg_dev *fgdev, int __user *arg)
 {
 	u32 wndstat = b3dfg_read32(fgdev, B3D_REG_WAND_STS);
-	dbg("wand status %x\n", wndstat);
+	dev_dbg(&fgdev->pdev->dev, "wand status %x\n", wndstat);
 	return __put_user(wndstat & 0x1, arg);
 }
 
@@ -571,19 +564,20 @@ static int enable_transmission(struct b3dfg_dev *fgdev)
 {
 	u16 command;
 	unsigned long flags;
+	struct device *dev = &fgdev->pdev->dev;
 
-	printk(KERN_INFO PFX "enable transmission\n");
+	dev_dbg(dev, "enable transmission\n");
 
 	/* check the cable is plugged in. */
 	if (!b3dfg_read32(fgdev, B3D_REG_WAND_STS)) {
-		printk(KERN_ERR PFX "cannot start transmission without wand\n");
+		dev_dbg(dev, "cannot start transmission without wand\n");
 		return -EINVAL;
 	}
 
 	/* check we're a bus master */
 	pci_read_config_word(fgdev->pdev, PCI_COMMAND, &command);
 	if (!(command & PCI_COMMAND_MASTER)) {
-		printk(KERN_ERR PFX "not a bus master, force-enabling\n");
+		dev_warn(dev, "not a bus master, force-enabling\n");
 		/* FIXME: why did we lose it in the first place? */
 		pci_write_config_word(fgdev->pdev, PCI_COMMAND,
 			command | PCI_COMMAND_MASTER);
@@ -592,7 +586,7 @@ static int enable_transmission(struct b3dfg_dev *fgdev)
 	spin_lock_irqsave(&fgdev->buffer_lock, flags);
 	if (fgdev->num_buffers == 0) {
 		spin_unlock_irqrestore(&fgdev->buffer_lock, flags);
-		printk(KERN_ERR PFX "cannot start transmission to 0 buffers\n");
+		dev_dbg(dev, "cannot start transmission to 0 buffers\n");
 		return -EINVAL;
 	}
 	spin_unlock_irqrestore(&fgdev->buffer_lock, flags);
@@ -613,10 +607,11 @@ static int enable_transmission(struct b3dfg_dev *fgdev)
 
 static void disable_transmission(struct b3dfg_dev *fgdev)
 {
+	struct device *dev = &fgdev->pdev->dev;
 	unsigned long flags;
 	u32 tmp;
 
-	printk(KERN_INFO PFX "disable transmission\n");
+	dev_dbg(dev, "disable transmission\n");
 
 	/* guarantee that no more interrupts will be serviced */
 	fgdev->transmission_enabled = 0;
@@ -628,7 +623,7 @@ static void disable_transmission(struct b3dfg_dev *fgdev)
 	 * hitting ctrl+c and seeing this message is useful for determining
 	 * the state of the board. */
 	tmp = b3dfg_read32(fgdev, B3D_REG_DMA_STS);
-	dbg("brontes DMA_STS reads %x after TX stopped\n", tmp);
+	dev_dbg(dev, "DMA_STS reads %x after TX stopped\n", tmp);
 
 	spin_lock_irqsave(&fgdev->buffer_lock, flags);
 	dequeue_all_buffers(fgdev);
@@ -670,8 +665,9 @@ static void handle_cstate_change(struct b3dfg_dev *fgdev)
 {
 	u32 cstate = b3dfg_read32(fgdev, B3D_REG_WAND_STS);
 	unsigned long when;
+	struct device *dev = &fgdev->pdev->dev;
 
-	dbg("cable state change: %u\n", cstate);
+	dev_dbg(dev, "cable state change: %u\n", cstate);
 
 	/*
 	 * When the wand is unplugged we reset our state. The hardware will
@@ -692,7 +688,7 @@ static void handle_cstate_change(struct b3dfg_dev *fgdev)
 	 *      so if too many come in.
 	 */
 	if (cstate) {
-		printk(KERN_WARNING PFX "ignoring unexpected plug event\n");
+		dev_warn(dev, "ignoring unexpected plug event\n");
 		return;
 	}
 	handle_cstate_unplug(fgdev);
@@ -714,7 +710,7 @@ static void handle_cstate_change(struct b3dfg_dev *fgdev)
 static irqreturn_t b3dfg_intr(int irq, void *dev_id)
 {
 	struct b3dfg_dev *fgdev = dev_id;
-	struct device *dev;
+	struct device *dev = &fgdev->pdev->dev;
 	struct b3dfg_buffer *buf = NULL;
 	unsigned int frame_size;
 	u32 sts;
@@ -724,19 +720,20 @@ static irqreturn_t b3dfg_intr(int irq, void *dev_id)
 
 	sts = b3dfg_read32(fgdev, B3D_REG_DMA_STS);
 	if (unlikely(sts == 0)) {
-		printk(KERN_INFO PFX "ignore interrupt, DMA status is 0\n");
+		dev_warn(dev, "ignore interrupt, DMA status is 0\n");
 		/* FIXME should return IRQ_NONE when we are stable */
 		goto out;
 	}
 
 	if (unlikely(!fgdev->transmission_enabled)) {
-		printk(KERN_INFO PFX "ignore interrupt, TX disabled\n");
+		dev_warn(dev, "ignore interrupt, TX disabled\n");
 		/* FIXME should return IRQ_NONE when we are stable */
 		goto out;
 	}
 
 	dropped = (sts >> 8) & 0xff;
-	dbg(KERN_INFO PFX "got intr, brontes DMASTS=%08x (dropped=%d comp=%d next_trf=%d)\n", sts, dropped, !!(sts & 0x4), sts & 0x3);
+	dev_dbg(dev, "intr: DMA_STS=%08x (drop=%d comp=%d next=%d)\n",
+		sts, dropped, !!(sts & 0x4), sts & 0x3);
 
 	if (unlikely(dropped > 0)) {
 		spin_lock(&fgdev->triplets_dropped_lock);
@@ -750,13 +747,12 @@ static irqreturn_t b3dfg_intr(int irq, void *dev_id)
 		goto out;
 	}
 
-	dev = &fgdev->pdev->dev;
 	frame_size = fgdev->frame_size;
 
 	spin_lock(&fgdev->buffer_lock);
 	if (unlikely(list_empty(&fgdev->buffer_queue))) {
 		/* FIXME need more sanity checking here */
-		dbg("driver has no buffer ready --> cannot program any more transfers\n");
+		dev_info(dev, "buffer not ready for next transfer\n");
 		fgdev->triplet_ready = 1;
 		goto out_unlock;
 	}
@@ -769,12 +765,12 @@ static irqreturn_t b3dfg_intr(int irq, void *dev_id)
 		tmp = b3dfg_read32(fgdev, B3D_REG_EC220_DMA_STS);
 		/* last DMA completed */
 		if (unlikely(tmp & 0x1)) {
-			printk(KERN_ERR PFX "EC220 reports error (%08x)\n", tmp);
+			dev_err(dev, "EC220 error: %08x\n", tmp);
 			/* FIXME flesh out error handling */
 			goto out_unlock;
 		}
 		if (unlikely(fgdev->cur_dma_frame_idx == -1)) {
-			printk(KERN_ERR PFX "ERROR completed but no last idx?\n");
+			dev_err(dev, "completed but no last idx?\n");
 			/* FIXME flesh out error handling */
 			goto out_unlock;
 		}
@@ -785,16 +781,16 @@ static irqreturn_t b3dfg_intr(int irq, void *dev_id)
 		buf = list_entry(fgdev->buffer_queue.next,
 				 struct b3dfg_buffer, list);
 		if (likely(buf)) {
-			dbg("handle frame completion\n");
+			dev_dbg(dev, "handle frame completion\n");
 			if (fgdev->cur_dma_frame_idx == B3DFG_FRAMES_PER_BUFFER - 1) {
 				/* last frame of that triplet completed */
-				dbg("triplet completed\n");
+				dev_dbg(dev, "triplet completed\n");
 				buf->state = B3DFG_BUFFER_POPULATED;
 				list_del_init(&buf->list);
 				wake_up_interruptible(&fgdev->buffer_waitqueue);
 			}
 		} else {
-			printk(KERN_ERR PFX "got frame but no buffer!\n");
+			dev_err(dev, "got frame but no buffer!\n");
 		}
 	}
 
@@ -803,19 +799,20 @@ static irqreturn_t b3dfg_intr(int irq, void *dev_id)
 
 		buf = list_entry(fgdev->buffer_queue.next,
 				 struct b3dfg_buffer, list);
-		dbg("program DMA transfer for frame %d\n", next_trf + 1);
+		dev_dbg(dev, "program DMA transfer for frame %d\n",
+			next_trf + 1);
 		if (likely(buf)) {
 			if (next_trf != fgdev->cur_dma_frame_idx + 1) {
-				printk(KERN_ERR PFX
-				       "ERROR mismatch, next_trf %d vs cur_dma_frame_idx %d\n",
-				       next_trf, fgdev->cur_dma_frame_idx);
-				/* FIXME we should handle dropped triplets here */
+				dev_err(dev,
+					"frame mismatch, got %d, expected %d\n",
+					next_trf, fgdev->cur_dma_frame_idx);
+				/* FIXME handle dropped triplets here */
 				goto out_unlock;
 			}
 			setup_frame_transfer(fgdev, buf, next_trf, 1);
 			need_ack = 0;
 		} else {
-			printk(KERN_ERR PFX "cannot setup next DMA due to no buffer\n");
+			dev_err(dev, "cannot setup DMA, no buffer\n");
 		}
 	} else {
 		fgdev->cur_dma_frame_idx = -1;
@@ -825,7 +822,7 @@ out_unlock:
 	spin_unlock(&fgdev->buffer_lock);
 out:
 	if (need_ack) {
-		dbg("acknowledging interrupt\n");
+		dev_dbg(dev, "acknowledging interrupt\n");
 		b3dfg_write32(fgdev, B3D_REG_EC220_DMA_STS, 0x0b);
 	}
 	return IRQ_HANDLED;
@@ -836,7 +833,7 @@ static int b3dfg_open(struct inode *inode, struct file *filp)
 	struct b3dfg_dev *fgdev =
 		container_of(inode->i_cdev, struct b3dfg_dev, chardev);
 
-	printk(KERN_INFO PFX "open\n");
+	dev_dbg(&fgdev->pdev->dev, "open\n");
 	filp->private_data = fgdev;
 	return 0;
 }
@@ -844,7 +841,7 @@ static int b3dfg_open(struct inode *inode, struct file *filp)
 static int b3dfg_release(struct inode *inode, struct file *filp)
 {
 	struct b3dfg_dev *fgdev = filp->private_data;
-	printk(KERN_INFO PFX "release\n");
+	dev_dbg(&fgdev->pdev->dev, "release\n");
 	set_transmission(fgdev, 0);
 
 	/* no buffer locking needed, this is serialized */
@@ -879,7 +876,7 @@ static long b3dfg_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 	case B3DFG_IOCTWAITBUF:
 		return wait_buffer(fgdev, (void __user *) arg);
 	default:
-		printk(KERN_ERR PFX "unrecognised ioctl %x\n", cmd);
+		dev_dbg(&fgdev->pdev->dev, "unrecognised ioctl %x\n", cmd);
 		return -EINVAL;
 	}
 }
@@ -887,6 +884,7 @@ static long b3dfg_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 static unsigned int b3dfg_poll(struct file *filp, poll_table *poll_table)
 {
 	struct b3dfg_dev *fgdev = filp->private_data;
+	struct device *dev = &fgdev->pdev->dev;
 	unsigned long flags, when;
 	int i;
 	int r = 0;
@@ -895,7 +893,7 @@ static unsigned int b3dfg_poll(struct file *filp, poll_table *poll_table)
 	mutex_lock(&fgdev->ioctl_mutex);
 
 	if (unlikely(!fgdev->transmission_enabled)) {
-		printk(KERN_ERR PFX "cannot poll() when transmission is disabled\n");
+		dev_dbg(dev, "cannot poll, transmission disabled\n");
 		r = POLLERR;
 		goto out;
 	}
@@ -1036,13 +1034,13 @@ static int __devinit b3dfg_probe(struct pci_dev *pdev,
 		return -ENOMEM;
 
 	if (minor < 0) {
-		printk(KERN_ERR PFX "too many devices found!\n");
+		dev_err(&pdev->dev, "too many devices found!\n");
 		return -EIO;
 	}
 
 	b3dfg_devices[minor] = 1;
-	printk(KERN_INFO PFX "probe device at %s with IRQ %d\n",
-		pci_name(pdev), pdev->irq);
+	dev_info(&pdev->dev, "probe device at %s with IRQ %d\n",
+		 pci_name(pdev), pdev->irq);
 
 	cdev_init(&fgdev->chardev, &b3dfg_fops);
 	fgdev->chardev.owner = THIS_MODULE;
@@ -1064,19 +1062,19 @@ static int __devinit b3dfg_probe(struct pci_dev *pdev,
 		goto err3;
 
 	if (pci_resource_len(pdev, B3DFG_BAR_REGS) != B3DFG_REGS_LENGTH) {
-		printk(KERN_ERR PFX "invalid register resource size\n");
+		dev_err(&pdev->dev, "invalid register resource size\n");
 		goto err4;
 	}
 
 	if (pci_resource_flags(pdev, B3DFG_BAR_REGS) != IORESOURCE_MEM) {
-		printk(KERN_ERR PFX "invalid resource flags");
+		dev_err(&pdev->dev, "invalid resource flags");
 		goto err4;
 	}
 
 	fgdev->regs = ioremap_nocache(pci_resource_start(pdev, B3DFG_BAR_REGS),
 		B3DFG_REGS_LENGTH);
 	if (!fgdev->regs) {
-		printk(KERN_ERR PFX "regs ioremap failed\n");
+		dev_err(&pdev->dev, "regs ioremap failed\n");
 		goto err4;
 	}
 
@@ -1084,13 +1082,13 @@ static int __devinit b3dfg_probe(struct pci_dev *pdev,
 	pci_set_drvdata(pdev, fgdev);
 	r = b3dfg_init_dev(fgdev);
 	if (r < 0) {
-		printk(KERN_ERR PFX "failed to initalize device\n");
+		dev_err(&pdev->dev, "failed to initalize device\n");
 		goto err5;
 	}
 
 	r = request_irq(pdev->irq, b3dfg_intr, IRQF_SHARED, DRIVER_NAME, fgdev);
 	if (r) {
-		printk(KERN_ERR PFX "couldn't request irq %d\n", pdev->irq);
+		dev_err(&pdev->dev, "couldn't request irq %d\n", pdev->irq);
 		goto err6;
 	}
 
@@ -1118,7 +1116,7 @@ static void __devexit b3dfg_remove(struct pci_dev *pdev)
 	struct b3dfg_dev *fgdev = pci_get_drvdata(pdev);
 	unsigned int minor = MINOR(fgdev->chardev.dev);
 
-	printk(KERN_INFO PFX "remove\n");
+	dev_dbg(&pdev->dev, "remove\n");
 
 	free_irq(pdev->irq, fgdev);
 	iounmap(fgdev->regs);
@@ -1141,7 +1139,7 @@ static int __init b3dfg_module_init(void)
 {
 	int r;
 
-	printk(KERN_INFO PFX "loaded\n");
+	printk(KERN_INFO DRIVER_NAME ": loaded\n");
 
 	b3dfg_class = class_create(THIS_MODULE, DRIVER_NAME);
 	if (IS_ERR(b3dfg_class))
@@ -1166,7 +1164,7 @@ err1:
 
 static void __exit b3dfg_module_exit(void)
 {
-	printk(KERN_INFO PFX "unloaded\n");
+	printk(KERN_INFO DRIVER_NAME ": unloaded\n");
 	pci_unregister_driver(&b3dfg_driver);
 	unregister_chrdev_region(b3dfg_devt, B3DFG_MAX_DEVS);
 	class_destroy(b3dfg_class);
