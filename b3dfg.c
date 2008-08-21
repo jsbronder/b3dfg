@@ -709,34 +709,93 @@ static void handle_cstate_change(struct b3dfg_dev *fgdev)
 	spin_unlock(&fgdev->cstate_lock);
 }
 
+/* Called with buffer_lock held. */
+static void transfer_complete(struct b3dfg_dev *fgdev)
+{
+	struct b3dfg_buffer *buf;
+	struct device *dev = &fgdev->pdev->dev;
+
+	pci_unmap_single(fgdev->pdev, fgdev->cur_dma_frame_addr,
+			 fgdev->frame_size, PCI_DMA_FROMDEVICE);
+	fgdev->cur_dma_frame_addr = 0;
+
+	buf = list_entry(fgdev->buffer_queue.next, struct b3dfg_buffer, list);
+	if (buf) {
+		dev_dbg(dev, "handle frame completion\n");
+		if (fgdev->cur_dma_frame_idx == B3DFG_FRAMES_PER_BUFFER - 1) {
+
+			/* last frame of that triplet completed */
+			dev_dbg(dev, "triplet completed\n");
+			buf->state = B3DFG_BUFFER_POPULATED;
+			list_del_init(&buf->list);
+			wake_up_interruptible(&fgdev->buffer_waitqueue);
+		}
+	} else {
+		dev_err(dev, "got frame but no buffer!\n");
+	}
+}
+
+/*
+ * Called with buffer_lock held.
+ *
+ * Note that idx is the (1-based) *next* frame to be transferred, while
+ * cur_dma_frame_idx is the (0-based) *last* frame to have been transferred (or
+ * -1 if none). Thus there should be a difference of 2 between them.
+ */
+static bool setup_next_frame_transfer(struct b3dfg_dev *fgdev, int idx)
+{
+	struct b3dfg_buffer *buf;
+	struct device *dev = &fgdev->pdev->dev;
+	bool need_ack = 1;
+
+	dev_dbg(dev, "program DMA transfer for next frame: %d\n", idx);
+
+	buf = list_entry(fgdev->buffer_queue.next, struct b3dfg_buffer, list);
+	if (buf) {
+		if (idx == fgdev->cur_dma_frame_idx + 2) {
+			if (setup_frame_transfer(fgdev, buf, idx - 1))
+				dev_err(dev, "unable to map DMA buffer\n");
+			need_ack = 0;
+		} else {
+			dev_err(dev, "frame mismatch, got %d, expected %d\n",
+				idx, fgdev->cur_dma_frame_idx + 2);
+
+			/* FIXME: handle dropped triplets here */
+		}
+	} else {
+		dev_err(dev, "cannot setup DMA, no buffer\n");
+	}
+
+	return need_ack;
+}
+
 static irqreturn_t b3dfg_intr(int irq, void *dev_id)
 {
 	struct b3dfg_dev *fgdev = dev_id;
 	struct device *dev = &fgdev->pdev->dev;
-	struct b3dfg_buffer *buf = NULL;
-	unsigned int frame_size;
 	u32 sts;
 	u8 dropped;
-	int next_trf;
-	int need_ack = 1;
+	bool need_ack = 1;
 
 	sts = b3dfg_read32(fgdev, B3D_REG_DMA_STS);
 	if (unlikely(sts == 0)) {
 		dev_warn(dev, "ignore interrupt, DMA status is 0\n");
+
 		/* FIXME should return IRQ_NONE when we are stable */
 		goto out;
 	}
 
 	if (unlikely(!fgdev->transmission_enabled)) {
 		dev_warn(dev, "ignore interrupt, TX disabled\n");
+
 		/* FIXME should return IRQ_NONE when we are stable */
 		goto out;
 	}
 
+	/* Handle dropped frames, as reported by the hardware. */
 	dropped = (sts >> 8) & 0xff;
 	dev_dbg(dev, "intr: DMA_STS=%08x (drop=%d comp=%d next=%d)\n",
 		sts, dropped, !!(sts & 0x4), sts & 0x3);
-
 	if (unlikely(dropped > 0)) {
 		spin_lock(&fgdev->triplets_dropped_lock);
 		fgdev->triplets_dropped += dropped;
@@ -749,77 +808,43 @@ static irqreturn_t b3dfg_intr(int irq, void *dev_id)
 		goto out;
 	}
 
-	frame_size = fgdev->frame_size;
-
 	spin_lock(&fgdev->buffer_lock);
 	if (unlikely(list_empty(&fgdev->buffer_queue))) {
+
 		/* FIXME need more sanity checking here */
 		dev_info(dev, "buffer not ready for next transfer\n");
 		fgdev->triplet_ready = 1;
 		goto out_unlock;
 	}
 
-	next_trf = sts & 0x3;
-
+	/* Has a frame transfer been completed? */
 	if (sts & 0x4) {
-		u32 tmp;
+		u32 dma_status = b3dfg_read32(fgdev, B3D_REG_EC220_DMA_STS);
 
-		tmp = b3dfg_read32(fgdev, B3D_REG_EC220_DMA_STS);
-		/* last DMA completed */
-		if (unlikely(tmp & 0x1)) {
-			dev_err(dev, "EC220 error: %08x\n", tmp);
+		/* Check for DMA errors reported by the hardware. */
+		if (unlikely(dma_status & 0x1)) {
+			dev_err(dev, "EC220 error: %08x\n", dma_status);
+
 			/* FIXME flesh out error handling */
 			goto out_unlock;
 		}
+
+		/* Sanity check, we should have a frame index at this point. */
 		if (unlikely(fgdev->cur_dma_frame_idx == -1)) {
 			dev_err(dev, "completed but no last idx?\n");
+
 			/* FIXME flesh out error handling */
 			goto out_unlock;
 		}
-		pci_unmap_single(fgdev->pdev, fgdev->cur_dma_frame_addr,
-				 frame_size, PCI_DMA_FROMDEVICE);
-		fgdev->cur_dma_frame_addr = 0;
 
-		buf = list_entry(fgdev->buffer_queue.next,
-				 struct b3dfg_buffer, list);
-		if (likely(buf)) {
-			dev_dbg(dev, "handle frame completion\n");
-			if (fgdev->cur_dma_frame_idx == B3DFG_FRAMES_PER_BUFFER - 1) {
-				/* last frame of that triplet completed */
-				dev_dbg(dev, "triplet completed\n");
-				buf->state = B3DFG_BUFFER_POPULATED;
-				list_del_init(&buf->list);
-				wake_up_interruptible(&fgdev->buffer_waitqueue);
-			}
-		} else {
-			dev_err(dev, "got frame but no buffer!\n");
-		}
+		transfer_complete(fgdev);
 	}
 
-	if (next_trf) {
-		next_trf--;
-
-		buf = list_entry(fgdev->buffer_queue.next,
-				 struct b3dfg_buffer, list);
-		dev_dbg(dev, "program DMA transfer for frame %d\n",
-			next_trf + 1);
-		if (likely(buf)) {
-			if (next_trf != fgdev->cur_dma_frame_idx + 1) {
-				dev_err(dev,
-					"frame mismatch, got %d, expected %d\n",
-					next_trf, fgdev->cur_dma_frame_idx);
-				/* FIXME handle dropped triplets here */
-				goto out_unlock;
-			}
-			if (setup_frame_transfer(fgdev, buf, next_trf))
-				dev_err(dev, "unable to map DMA buffer\n");
-			need_ack = 0;
-		} else {
-			dev_err(dev, "cannot setup DMA, no buffer\n");
-		}
-	} else {
+	/* Is there another frame transfer pending? */
+	if (sts & 0x3)
+		need_ack = setup_next_frame_transfer(fgdev, sts & 0x3);
+	else
 		fgdev->cur_dma_frame_idx = -1;
-	}
 
 out_unlock:
 	spin_unlock(&fgdev->buffer_lock);
