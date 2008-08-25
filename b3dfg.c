@@ -701,14 +701,12 @@ static irqreturn_t b3dfg_intr(int irq, void *dev_id)
 	if (unlikely(sts == 0)) {
 		dev_warn(dev, "ignore interrupt, DMA status is 0\n");
 		res = IRQ_NONE;
-		need_ack = 0;
 		goto out;
 	}
 
 	if (unlikely(!fgdev->transmission_enabled)) {
 		dev_warn(dev, "ignore interrupt, TX disabled\n");
-		res = IRQ_NONE;
-		need_ack = 0;
+		res = IRQ_HANDLED;
 		goto out;
 	}
 
