@@ -695,19 +695,20 @@ static irqreturn_t b3dfg_intr(int irq, void *dev_id)
 	u32 sts;
 	u8 dropped;
 	bool need_ack = 1;
+	irqreturn_t res = IRQ_HANDLED;
 
 	sts = b3dfg_read32(fgdev, B3D_REG_DMA_STS);
 	if (unlikely(sts == 0)) {
 		dev_warn(dev, "ignore interrupt, DMA status is 0\n");
-
-		/* FIXME should return IRQ_NONE when we are stable */
+		res = IRQ_NONE;
+		need_ack = 0;
 		goto out;
 	}
 
 	if (unlikely(!fgdev->transmission_enabled)) {
 		dev_warn(dev, "ignore interrupt, TX disabled\n");
-
-		/* FIXME should return IRQ_NONE when we are stable */
+		res = IRQ_NONE;
+		need_ack = 0;
 		goto out;
 	}
 
@@ -772,7 +773,7 @@ out:
 		dev_dbg(dev, "acknowledging interrupt\n");
 		b3dfg_write32(fgdev, B3D_REG_EC220_DMA_STS, 0x0b);
 	}
-	return IRQ_HANDLED;
+	return res;
 }
 
 static int b3dfg_open(struct inode *inode, struct file *filp)
