@@ -52,14 +52,9 @@
  * represent colours: they are 3 distinct frames). A group of 3 frames is
  * referred to as a buffer.
  *
- * Before enabling image transmission, you must call b3dfg_set_num_buffers()
- * to allocate some buffers. The buffers are allocated by the kernel driver,
- * so you simply specify how many you would like.
- *
- * After allocating buffers, you can gain access to the frame data within by
- * <em>mapping</em> the buffers into your process using b3dfg_map_buffers().
- * This function returns a pointer to an area of memory with the following
- * structure:
+ * You can gain access to the frame data within buffers by <em>mapping</em>
+ * the buffers into your process using b3dfg_map_buffers(). This function
+ * returns a pointer to an area of memory with the following structure:
  *
  * <table>
  * <tr>
@@ -375,31 +370,18 @@ API_EXPORTED int b3dfg_set_transmission(b3dfg_dev *dev, int enabled)
 }
 
 /** \ingroup io
- * Set the number of buffers to potentially be used for later I/O. Calling
- * this function causes the kernel to allocate the buffers internally.
+ * Set the number of buffers to potentially be used for later I/O.
  *
- * It is legal to call this function multiple times with different values,
- * the kernel will grow or shrink its buffer pool accordingly.
- *
- * This function cannot be called when a mapping is active or transmission
- * is enabled.
- *
- * This function will dequeue all buffers that were previously queued.
+ * This function is deprecated and does nothing.
  *
  * \param dev a device handle
  * \param buffers the number of buffers to keep in the pool
- * \returns 0 on success, non-zero on error
+ * \returns 0
  */
 API_EXPORTED int b3dfg_set_num_buffers(b3dfg_dev *dev, int buffers)
 {
-	int r;
-	b3dfg_dbg("%d buffers", buffers);
-	r = ioctl(dev->fd, B3DFG_IOCTNUMBUFS, buffers);
-	if (r < 0)
-		b3dfg_err("IOCTNUMBUFS failed r=%d errno=%d", r, errno);
-	else
-		dev->num_buffers = buffers;
-	return r;
+	b3dfg_dbg("b3dfg_set_num_buffers is deprecated");
+	return 0;
 }
 
 /** \ingroup io
@@ -509,26 +491,18 @@ API_EXPORTED int b3dfg_wait_buffer(b3dfg_dev *dev, int buffer,
  * to locate any frame within the mapping. The mapping is of size precisely
  * big enough to accomodate all of the allocated buffers and their frames.
  *
- * This function can only be called after a specified number of buffers
- * have been set with b3dfg_set_num_buffers(). You cannot map the buffers
- * twice, but you can use b3dfg_get_mapping() to retrieve the address of
- * an already-created mapping.
- * 
- * You must unmap the buffer with b3dfg_unmap_buffers() before altering
- * the number of buffers.
+ * You cannot map the buffers twice, but you can use b3dfg_get_mapping() to
+ * retrieve the address of an already-created mapping.
  *
- * \param dev a device handle
- * \param prefault whether to prefault the buffers or not. If prefault=0, you
- * will incur a small performance penalty the first time you access each 4kb
- * page within the mapping. If non-zero, this parameter causes the system to
- * access each page immediately so that no performance penalty occurs later.
- * \returns the address of the new mapping
+ * \param dev a device handle \param prefault whether to prefault the buffers
+ * or not. If prefault=0, you will incur a small performance penalty the first
+ * time you access each 4kb page within the mapping. If non-zero, this
+ * parameter causes the system to access each page immediately so that no
+ * performance penalty occurs later.  \returns the address of the new mapping
  * \returns NULL on error
  */
-API_EXPORTED unsigned char *b3dfg_map_buffers(b3dfg_dev *dev, int prefault)
-{
-	unsigned char *mapping;
-	int flags = MAP_SHARED;
+API_EXPORTED unsigned char *b3dfg_map_buffers(b3dfg_dev *dev, int prefault) {
+unsigned char *mapping; int flags = MAP_SHARED;
 
 	if (dev->mapping) {
 		b3dfg_err("buffers already mapped");
