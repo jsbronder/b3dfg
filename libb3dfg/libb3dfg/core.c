@@ -275,7 +275,7 @@ API_EXPORTED b3dfg_dev *b3dfg_open(unsigned int idx)
 	b3dfg_dbg("opened fd=%d frame_size=%d", fd, frame_size);
 	dev->fd = fd;
 	dev->frame_size = frame_size;
-	dev->num_buffers = 0;
+	dev->num_buffers = 2;
 	dev->mapping = NULL;
 	return dev;
 }
