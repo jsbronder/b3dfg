@@ -788,7 +788,7 @@ static int b3dfg_release(struct inode *inode, struct file *filp)
 {
 	struct b3dfg_dev *fgdev = filp->private_data;
 	dev_dbg(&fgdev->pdev->dev, "release\n");
-	set_transmission(fgdev, 0);
+	disable_transmission(fgdev);
 	return 0;
 }
 
