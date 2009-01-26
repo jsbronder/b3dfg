@@ -1,4 +1,4 @@
-AC_INIT([libb3dfg], [0.1_rc1])
+AC_INIT([libb3dfg], [0.6_rc1])
 AM_INIT_AUTOMAKE
 AC_CONFIG_SRCDIR([libb3dfg/core.c])
 AM_CONFIG_HEADER([config.h])
