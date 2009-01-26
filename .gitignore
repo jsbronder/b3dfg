@@ -1,0 +1,11 @@
+*.swp
+*o.cmd
+*.[oa]
+b3dfg.ko
+b3dfg.mod.c
+Module.symvers
+.tmp_versions/
+modules.order
+user/b3dfgstress
+user/b3dfgtest
+user/b3dfgutil
