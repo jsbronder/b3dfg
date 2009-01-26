@@ -119,7 +119,7 @@ struct b3dfg_dev {
 	/* no protection needed: all finalized at initialization time */
 	struct pci_dev *pdev;
 	struct cdev chardev;
-	struct class_device *classdev;
+	struct device *dev;
 	void __iomem *regs;
 	unsigned int frame_size;
 
@@ -213,8 +213,8 @@ static int setup_frame_transfer(struct b3dfg_dev *fgdev,
 
 	frm_addr = buf->frame[frame];
 	frm_addr_dma = pci_map_single(fgdev->pdev, frm_addr,
-				      frm_size, PCI_DMA_FROMDEVICE);
-	if (pci_dma_mapping_error(frm_addr_dma))
+					  frm_size, PCI_DMA_FROMDEVICE);
+	if (pci_dma_mapping_error(fgdev->pdev, frm_addr_dma))
 		return -ENOMEM;
 
 	fgdev->cur_dma_frame_addr = frm_addr_dma;
@@ -248,6 +248,7 @@ static int queue_buffer(struct b3dfg_dev *fgdev, int bufidx)
 
 	spin_lock_irqsave(&fgdev->buffer_lock, flags);
 	if (bufidx < 0 || bufidx >= b3dfg_nbuf) {
+		dev_dbg(dev, "Invalid buffer index, %d\n", bufidx);
 		r = -ENOENT;
 		goto out;
 	}
@@ -432,11 +433,11 @@ out:
 }
 
 /* mmap page fault handler */
-static unsigned long b3dfg_vma_nopfn(struct vm_area_struct *vma,
-	unsigned long address)
+static int b3dfg_vma_fault(struct vm_area_struct *vma,
+	struct vm_fault *vmf)
 {
 	struct b3dfg_dev *fgdev = vma->vm_file->private_data;
-	unsigned long off = address - vma->vm_start;
+	unsigned long off = vmf->pgoff << PAGE_SHIFT;
 	unsigned int frame_size = fgdev->frame_size;
 	unsigned int buf_size = frame_size * B3DFG_FRAMES_PER_BUFFER;
 	unsigned char *addr;
@@ -452,17 +453,17 @@ static unsigned long b3dfg_vma_nopfn(struct vm_area_struct *vma,
 	unsigned int frm_off = buf_off % frame_size;
 
 	if (unlikely(buf_idx >= b3dfg_nbuf))
-		return NOPFN_SIGBUS;
+		return VM_FAULT_SIGBUS;
 
 	addr = fgdev->buffers[buf_idx].frame[frm_idx] + frm_off;
-	vm_insert_pfn(vma, vma->vm_start + off,
-		      virt_to_phys(addr) >> PAGE_SHIFT);
+	vm_insert_pfn(vma, (unsigned long)vmf->virtual_address,
+			  virt_to_phys(addr) >> PAGE_SHIFT);
 
-	return NOPFN_REFAULT;
+	return VM_FAULT_NOPAGE;
 }
 
 static struct vm_operations_struct b3dfg_vm_ops = {
-	.nopfn = b3dfg_vma_nopfn,
+	.fault = b3dfg_vma_fault,
 };
 
 static int get_wand_status(struct b3dfg_dev *fgdev, int __user *arg)
@@ -601,12 +602,12 @@ static void handle_cstate_change(struct b3dfg_dev *fgdev)
 	 * broken wire and is momentarily losing contact.
 	 *
 	 * TODO: At the moment if you plug in the cable then enable transmission
-	 *       the hardware will raise a couple of spurious interrupts, so
-	 *       just ignore them for now.
+	 *	   the hardware will raise a couple of spurious interrupts, so
+	 *	   just ignore them for now.
 	 *
-	 *      Once the hardware is fixed we should complain and treat it as an
-	 *      unplug. Or at least track how frequently it is happening and do
-	 *      so if too many come in.
+	 *	  Once the hardware is fixed we should complain and treat it as an
+	 *	  unplug. Or at least track how frequently it is happening and do
+	 *	  so if too many come in.
 	 */
 	if (cstate) {
 		dev_warn(dev, "ignoring unexpected plug event\n");
@@ -970,12 +971,16 @@ static int __devinit b3dfg_probe(struct pci_dev *pdev,
 		goto err_release_minor;
 	}
 
-	fgdev->classdev = class_device_create(b3dfg_class, NULL, devno,
-					      &pdev->dev, DRIVER_NAME "%d",
-					      minor);
-	if (IS_ERR(fgdev->classdev)) {
-		dev_err(&pdev->dev, "cannot create class device\n");
-		r = PTR_ERR(fgdev->classdev);
+	fgdev->dev = device_create(
+		b3dfg_class,
+		&pdev->dev,
+		devno,
+		dev_get_drvdata(&pdev->dev),
+		DRIVER_NAME "%d", minor);
+
+	if (IS_ERR(fgdev->dev)) {
+		dev_err(&pdev->dev, "cannot create device\n");
+		r = PTR_ERR(fgdev->dev);
 		goto err_del_cdev;
 	}
 
@@ -992,12 +997,12 @@ static int __devinit b3dfg_probe(struct pci_dev *pdev,
 		goto err_disable;
 	}
 
-	if (pci_resource_flags(pdev, B3DFG_BAR_REGS) != IORESOURCE_MEM) {
+	if (pci_resource_flags(pdev, B3DFG_BAR_REGS)
+            != (IORESOURCE_MEM | IORESOURCE_SIZEALIGN)) {
 		dev_err(&pdev->dev, "invalid resource flags\n");
 		r = -EIO;
 		goto err_disable;
 	}
-
 	r = pci_request_regions(pdev, DRIVER_NAME);
 	if (r) {
 		dev_err(&pdev->dev, "cannot obtain PCI resources\n");
@@ -1045,7 +1050,7 @@ err_free_res:
 err_disable:
 	pci_disable_device(pdev);
 err_dev_unreg:
-	class_device_unregister(fgdev->classdev);
+	device_destroy(b3dfg_class, devno);
 err_del_cdev:
 	cdev_del(&fgdev->chardev);
 err_release_minor:
@@ -1066,7 +1071,7 @@ static void __devexit b3dfg_remove(struct pci_dev *pdev)
 	iounmap(fgdev->regs);
 	pci_release_regions(pdev);
 	pci_disable_device(pdev);
-	class_device_unregister(fgdev->classdev);
+	device_destroy(b3dfg_class, MKDEV(MAJOR(b3dfg_devt), minor));
 	cdev_del(&fgdev->chardev);
 	free_all_frame_buffers(fgdev);
 	kfree(fgdev);
@@ -1086,7 +1091,7 @@ static int __init b3dfg_module_init(void)
 
 	if (b3dfg_nbuf < 2) {
 		printk(KERN_ERR DRIVER_NAME
-		       ": buffer_count is out of range (must be >= 2)");
+			   ": buffer_count is out of range (must be >= 2)");
 		return -EINVAL;
 	}
 
