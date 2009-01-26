@@ -164,10 +164,6 @@ static dev_t b3dfg_devt;
 
 static const struct pci_device_id b3dfg_ids[] __devinitdata = {
 	{ PCI_DEVICE(0x0b3d, 0x0001) },
-
-	/* FIXME: remove this ID once all boards have been moved to 0xb3d.
-	 * Eureka's vendor ID that we borrowed before we bought our own. */
-	{ PCI_DEVICE(0x1901, 0x0001) },
 	{ },
 };
 
@@ -802,10 +798,6 @@ static long b3dfg_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		return __put_user(fgdev->frame_size, (int __user *) arg);
 	case B3DFG_IOCGWANDSTAT:
 		return get_wand_status(fgdev, (int __user *) arg);
-	case B3DFG_IOCTNUMBUFS:
-
-		/* TODO: Remove once userspace stops using this. */
-		return 0;
 	case B3DFG_IOCTTRANS:
 		return set_transmission(fgdev, (int) arg);
 	case B3DFG_IOCTQUEUEBUF:
