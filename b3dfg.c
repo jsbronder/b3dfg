@@ -2,7 +2,9 @@
  * Brontes PCI frame grabber driver
  *
  * Copyright (C) 2008 3M Company
- * Contact: Daniel Drake <ddrake@brontes3d.com>
+ * Contact: Justin Bronder <jsbronder@brontes3d.com>
+ * Original Authors: Daniel Drake <ddrake@brontes3d.com>
+ *                   Duane Griffin <duaneg@dghda.com>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -34,14 +36,7 @@
 #include <linux/wait.h>
 #include <linux/mm.h>
 #include <linux/version.h>
-
-#include <asm/uaccess.h>
-
-/* TODO:
- * queue/wait buffer presents filltime results for each frame?
- * counting of dropped frames
- * review endianness
- */
+#include <linux/uaccess.h>
 
 static unsigned int b3dfg_nbuf = 2;
 
@@ -216,8 +211,10 @@ static int setup_frame_transfer(struct b3dfg_dev *fgdev,
 	fgdev->cur_dma_frame_addr = frm_addr_dma;
 	fgdev->cur_dma_frame_idx = frame;
 
-	b3dfg_write32(fgdev, B3D_REG_EC220_DMA_ADDR, cpu_to_le32(frm_addr_dma));
-	b3dfg_write32(fgdev, B3D_REG_EC220_TRF_SIZE, cpu_to_le32(frm_size >> 2));
+	b3dfg_write32(fgdev, B3D_REG_EC220_DMA_ADDR,
+					cpu_to_le32(frm_addr_dma));
+	b3dfg_write32(fgdev, B3D_REG_EC220_TRF_SIZE,
+					cpu_to_le32(frm_size >> 2));
 	b3dfg_write32(fgdev, B3D_REG_EC220_DMA_STS, 0xf);
 
 	return 0;
@@ -598,12 +595,12 @@ static void handle_cstate_change(struct b3dfg_dev *fgdev)
 	 * broken wire and is momentarily losing contact.
 	 *
 	 * TODO: At the moment if you plug in the cable then enable transmission
-	 *	   the hardware will raise a couple of spurious interrupts, so
-	 *	   just ignore them for now.
+	 * the hardware will raise a couple of spurious interrupts, so
+	 * just ignore them for now.
 	 *
-	 *	  Once the hardware is fixed we should complain and treat it as an
-	 *	  unplug. Or at least track how frequently it is happening and do
-	 *	  so if too many come in.
+	 * Once the hardware is fixed we should complain and treat it as an
+	 * unplug. Or at least track how frequently it is happening and do
+	 * so if too many come in.
 	 */
 	if (cstate) {
 		dev_warn(dev, "ignoring unexpected plug event\n");
@@ -990,7 +987,7 @@ static int __devinit b3dfg_probe(struct pci_dev *pdev,
 	}
 
 	if (pci_resource_flags(pdev, B3DFG_BAR_REGS)
-            != (IORESOURCE_MEM | IORESOURCE_SIZEALIGN)) {
+				!= (IORESOURCE_MEM | IORESOURCE_SIZEALIGN)) {
 		dev_err(&pdev->dev, "invalid resource flags\n");
 		r = -EIO;
 		goto err_disable;
