@@ -390,7 +390,7 @@ API_EXPORTED int b3dfg_set_num_buffers(b3dfg_dev *dev, int buffers)
  *
  * \param dev a device handle
  * \param buffer the buffer to queue
- * \returns 0 on success, non-zero on error
+ * \returns 0 on buffer queued, 1 if the buffer is already queued, negative on error
  */
 API_EXPORTED int b3dfg_queue_buffer(b3dfg_dev *dev, int buffer)
 {
@@ -398,8 +398,21 @@ API_EXPORTED int b3dfg_queue_buffer(b3dfg_dev *dev, int buffer)
 	
 	b3dfg_dbg("buffer %d", buffer);
 	r = ioctl(dev->fd, B3DFG_IOCTQUEUEBUF, buffer);
-	if (r < 0)
-		b3dfg_err("IOCTQUEUEBUF(%d) failed r=%d errno=%d", buffer, r, errno);
+	if (r < 0) {
+		if (errno == -EINVAL){
+			/*
+			 * It's possible that the caller has already queued this buffer
+			 * and is attempting to do so again.  In this case, the driver
+			 * will return EINVAL.  This is a mistake in the caller's code,
+			 * so we don't return an error here.
+			 */
+			// TOFIX:  We need real return codes
+			b3dfg_dbg("IOCTLQUEUEBUF:  buffer %d was already queued", buffer);
+			r = 1;
+		} else {
+			b3dfg_err("IOCTQUEUEBUF(%d) failed r=%d errno=%d", buffer, r, errno);
+		}
+	}
 	return r;
 }
 
@@ -584,3 +597,4 @@ API_EXPORTED void b3dfg_exit(void)
 
 }
 
+// vim: noet
