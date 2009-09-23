@@ -399,7 +399,7 @@ API_EXPORTED int b3dfg_queue_buffer(b3dfg_dev *dev, int buffer)
 	b3dfg_dbg("buffer %d", buffer);
 	r = ioctl(dev->fd, B3DFG_IOCTQUEUEBUF, buffer);
 	if (r < 0) {
-		if (errno == -EINVAL){
+		if (errno == EINVAL){
 			/*
 			 * It's possible that the caller has already queued this buffer
 			 * and is attempting to do so again.  In this case, the driver
