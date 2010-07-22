@@ -464,7 +464,6 @@ static int get_wand_status(struct b3dfg_dev *fgdev, int __user *arg)
 
 static int enable_transmission(struct b3dfg_dev *fgdev)
 {
-	u16 command;
 	unsigned long flags;
 	struct device *dev = &fgdev->pdev->dev;
 
