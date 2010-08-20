@@ -38,7 +38,7 @@
 #include <linux/uaccess.h>
 #include <linux/sched.h>
 
-static unsigned int b3dfg_nbuf = 2;
+static unsigned int b3dfg_nbuf = 3;
 
 MODULE_AUTHOR("Daniel Drake <ddrake@brontes3d.com>");
 MODULE_DESCRIPTION("Brontes frame grabber driver");
