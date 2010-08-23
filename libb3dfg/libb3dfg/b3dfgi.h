@@ -10,16 +10,19 @@
 #ifndef __B3DFGI_H___
 #define __B3DFGI_H___
 #include <sys/ioctl.h>
+#include <sys/time.h>
 
 struct b3dfg_poll {
 	int buffer_idx;
 	unsigned int triplets_dropped;
+	struct timeval tv;
 };
 
 struct b3dfg_wait {
 	int buffer_idx;
 	unsigned int timeout;
 	unsigned int triplets_dropped;
+	struct timeval tv;
 };
 
 #define B3DFG_IOC_MAGIC         0xb3 /* dfg :-) */
@@ -68,3 +71,4 @@ void b3dfg_log(enum b3dfg_log_level, const char *function,
 
 #endif
 
+// vim: noet

@@ -9,6 +9,7 @@
 
 #ifndef __B3DFG_H___
 #define __B3DFG_H___
+#include <sys/time.h>
 
 struct b3dfg_dev;
 typedef struct b3dfg_dev b3dfg_dev;
@@ -27,9 +28,10 @@ int b3dfg_set_transmission(b3dfg_dev *dev, int enabled);
 
 int b3dfg_set_num_buffers(b3dfg_dev *dev, int buffers);
 int b3dfg_queue_buffer(b3dfg_dev *dev, int buffer);
-int b3dfg_poll_buffer(b3dfg_dev *dev, int buffer, unsigned int *dropped);
+int b3dfg_poll_buffer(b3dfg_dev *dev, int buffer, unsigned int *dropped,
+	struct timeval *tv);
 int b3dfg_wait_buffer(b3dfg_dev *dev, int buffer, unsigned int timeout,
-	unsigned int *dropped);
+	unsigned int *dropped, struct timeval *tv);
 
 unsigned char *b3dfg_map_buffers(b3dfg_dev *dev, int prefault);
 unsigned char *b3dfg_get_mapping(b3dfg_dev *dev);
@@ -37,3 +39,4 @@ void b3dfg_unmap_buffers(b3dfg_dev *dev);
 
 #endif
 
+// vim: noet

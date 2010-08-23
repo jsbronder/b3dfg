@@ -17,6 +17,7 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include <string.h>
 
 #include "b3dfg.h"
 #include "b3dfgi.h"
@@ -434,7 +435,7 @@ API_EXPORTED int b3dfg_queue_buffer(b3dfg_dev *dev, int buffer)
  * \returns negative on error
  */
 API_EXPORTED int b3dfg_poll_buffer(b3dfg_dev *dev, int buffer,
-	unsigned int *dropped)
+	unsigned int *dropped, struct timeval *tv)
 {
 	int r;
 	struct b3dfg_poll p = { .buffer_idx = buffer };
@@ -445,6 +446,8 @@ API_EXPORTED int b3dfg_poll_buffer(b3dfg_dev *dev, int buffer,
 		b3dfg_err("IOCTPOLLBUF(%d) failed r=%d errno=%d", buffer, r, errno);
 	else if (dropped)
 		*dropped = p.triplets_dropped;
+	if (tv)
+		memcpy(tv, &p.tv, sizeof(*tv));
 	return r;
 }
 
@@ -475,7 +478,7 @@ API_EXPORTED int b3dfg_poll_buffer(b3dfg_dev *dev, int buffer,
  * \returns other negative code on other error
  */
 API_EXPORTED int b3dfg_wait_buffer(b3dfg_dev *dev, int buffer,
-	unsigned int timeout, unsigned int *dropped)
+	unsigned int timeout, unsigned int *dropped, struct timeval *tv)
 {
 	struct b3dfg_wait w = { .buffer_idx = buffer, .timeout = timeout };
 	int r;
@@ -492,6 +495,8 @@ API_EXPORTED int b3dfg_wait_buffer(b3dfg_dev *dev, int buffer,
 			buffer, r, errno);
 	} else if (dropped)
 		*dropped = w.triplets_dropped;
+	if (tv)
+		memcpy(tv, &w.tv, sizeof(*tv));
 	return r;
 }
 

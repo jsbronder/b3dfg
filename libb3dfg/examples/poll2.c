@@ -60,7 +60,7 @@ int main(void)
 	}
 
 	while (1) {
-		r = b3dfg_wait_buffer(dev, next_buf, 1000, &dropped);
+		r = b3dfg_wait_buffer(dev, next_buf, 1000, &dropped, NULL);
 		if (r < 0) {
 			fprintf(stderr, "poll failed error %d\n", r);
 			break;

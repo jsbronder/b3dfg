@@ -99,7 +99,7 @@ int main(void)
 			}
 			continue;
 		}
-		r = b3dfg_poll_buffer(dev, next_buf, &dropped);
+		r = b3dfg_poll_buffer(dev, next_buf, &dropped, NULL);
 		if (r < 0) {
 			fprintf(stderr, "poll failed error %d\n", r);
 			break;

@@ -215,6 +215,7 @@ int main(void)
     clock_gettime(CLOCK_REALTIME, &t1s);
     time_t t0s = t1s.tv_sec;
     double t0 = t1s.tv_nsec / 1e9;
+    struct timeval buffer_ts;
 
     for (j = 0; j < NTESTS; j++) {
         int ncaptures = ntrig[j];
@@ -226,7 +227,7 @@ int main(void)
         for (i = 1; i <= ncaptures+0; i++) {
             printf("=== calling b3dfg_wait_buffer(%p, %d, %dms, &dropped)\n", dev, buffer, TIMEOUT);
             int dropped;
-            if ((r = b3dfg_wait_buffer(dev, buffer, TIMEOUT, &dropped)) < 0) {
+            if ((r = b3dfg_wait_buffer(dev, buffer, TIMEOUT, &dropped, &buffer_ts)) < 0) {
                 if (r == -ETIMEDOUT) {
                     if (i == ncaptures+1){
                         printf("=== hit expected timeout\n");
@@ -238,7 +239,8 @@ int main(void)
                 goto out;
             }
             int atime = TIMEOUT-r;
-            printf("            b3dfg_wait_buffer returned after %dms, dropped=%d\n", atime, dropped);
+            printf("            b3dfg_wait_buffer returned after %dms, dropped=%d, time=%lu.%lu\n",
+                atime, dropped, buffer_ts.tv_sec, buffer_ts.tv_usec);
 
             if (i > 1 && atime > maxtime) maxtime = atime;
             if (i > 1 && atime < mintime) mintime = atime;
