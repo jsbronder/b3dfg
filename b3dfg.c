@@ -103,6 +103,7 @@ struct b3dfg_buffer {
 	unsigned char *frame[B3DFG_FRAMES_PER_BUFFER];
 	struct list_head list;
 	u8 state;
+	unsigned long jiffies;
 };
 
 struct b3dfg_dev {
@@ -165,12 +166,14 @@ MODULE_DEVICE_TABLE(pci, b3dfg_ids);
 struct b3dfg_poll {
 	int buffer_idx;
 	unsigned int triplets_dropped;
+	struct timeval tv;
 };
 
 struct b3dfg_wait {
 	int buffer_idx;
 	unsigned int timeout;
 	unsigned int triplets_dropped;
+	struct timeval tv;
 };
 
 /**** register I/O ****/
@@ -300,6 +303,7 @@ static int poll_buffer(struct b3dfg_dev *fgdev, void __user *arg)
 		p.triplets_dropped = fgdev->triplets_dropped;
 		fgdev->triplets_dropped = 0;
 		spin_unlock(&fgdev->triplets_dropped_lock);
+		jiffies_to_timeval(buf->jiffies, &p.tv);
 	} else {
 		r = 0;
 	}
@@ -412,6 +416,7 @@ out_triplets_dropped:
 	w.triplets_dropped = fgdev->triplets_dropped;
 	fgdev->triplets_dropped = 0;
 	spin_unlock(&fgdev->triplets_dropped_lock);
+	jiffies_to_timeval(buf->jiffies, &w.tv);
 
 out_unlock:
 	spin_unlock_irqrestore(&fgdev->buffer_lock, flags);
@@ -623,6 +628,7 @@ static void transfer_complete(struct b3dfg_dev *fgdev)
 		/* last frame of that triplet completed */
 		dev_dbg(dev, "triplet completed\n");
 		buf->state = B3DFG_BUFFER_POPULATED;
+		buf->jiffies = jiffies;
 		list_del_init(&buf->list);
 		wake_up_interruptible(&fgdev->buffer_waitqueue);
 	}
