@@ -10,7 +10,7 @@ AC_C_INLINE
 AM_PROG_CC_C_O
 
 # Library versioning
-lt_major="0"
+lt_major="1"
 lt_revision="0"
 lt_age="0"
 AC_SUBST(lt_major)
