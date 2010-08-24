@@ -56,7 +56,7 @@ MODULE_LICENSE("GPL");
 #define B3DFG_IOCTNUMBUFS	_IO(B3DFG_IOC_MAGIC, 2)
 #define B3DFG_IOCTTRANS		_IO(B3DFG_IOC_MAGIC, 3)
 #define B3DFG_IOCTQUEUEBUF	_IO(B3DFG_IOC_MAGIC, 4)
-#define B3DFG_IOCTPOLLBUF	_IOWR(B3DFG_IOC_MAGIC, 5, struct b3dfg_poll)
+//#define B3DFG_IOCTPOLLBUF	_IOWR(B3DFG_IOC_MAGIC, 5, struct b3dfg_poll)
 #define B3DFG_IOCTWAITBUF	_IOWR(B3DFG_IOC_MAGIC, 6, struct b3dfg_wait)
 #define B3DFG_IOCGWANDSTAT	_IOR(B3DFG_IOC_MAGIC, 7, int)
 
@@ -164,12 +164,6 @@ MODULE_DEVICE_TABLE(pci, b3dfg_ids);
 
 /***** user-visible types *****/
 
-struct b3dfg_poll {
-	int buffer_idx;
-	unsigned int triplets_dropped;
-	struct timeval tv;
-};
-
 struct b3dfg_wait {
 	int buffer_idx;
 	unsigned int timeout;
@@ -266,54 +260,6 @@ static int queue_buffer(struct b3dfg_dev *fgdev, int bufidx)
 
 out:
 	spin_unlock_irqrestore(&fgdev->buffer_lock, flags);
-	return r;
-}
-
-/* non-blocking buffer poll. returns 1 if data is present in the buffer,
- * 0 otherwise */
-static int poll_buffer(struct b3dfg_dev *fgdev, void __user *arg)
-{
-	struct device *dev = &fgdev->pdev->dev;
-	struct b3dfg_poll p;
-	struct b3dfg_buffer *buf;
-	unsigned long flags;
-	int r = 1;
-	int arg_out = 0;
-
-	if (copy_from_user(&p, arg, sizeof(p)))
-		return -EFAULT;
-
-	if (unlikely(!fgdev->transmission_enabled)) {
-		dev_dbg(dev, "cannot poll, transmission disabled\n");
-		return -EINVAL;
-	}
-
-	if (p.buffer_idx < 0 || p.buffer_idx >= b3dfg_nbuf)
-		return -ENOENT;
-
-	buf = &fgdev->buffers[p.buffer_idx];
-
-	spin_lock_irqsave(&fgdev->buffer_lock, flags);
-
-	if (likely(buf->state == B3DFG_BUFFER_POPULATED)) {
-		arg_out = 1;
-		buf->state = B3DFG_BUFFER_IDLE;
-
-		/* IRQs already disabled by spin_lock_irqsave above. */
-		spin_lock(&fgdev->triplets_dropped_lock);
-		p.triplets_dropped = fgdev->triplets_dropped;
-		fgdev->triplets_dropped = 0;
-		spin_unlock(&fgdev->triplets_dropped_lock);
-		jiffies_to_timeval(buf->jiffies, &p.tv);
-	} else {
-		r = 0;
-	}
-
-	spin_unlock_irqrestore(&fgdev->buffer_lock, flags);
-
-	if (arg_out && copy_to_user(arg, &p, sizeof(p)))
-		r = -EFAULT;
-
 	return r;
 }
 
@@ -782,8 +728,6 @@ static long b3dfg_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		return set_transmission(fgdev, (int) arg);
 	case B3DFG_IOCTQUEUEBUF:
 		return queue_buffer(fgdev, (int) arg);
-	case B3DFG_IOCTPOLLBUF:
-		return poll_buffer(fgdev, (void __user *) arg);
 	case B3DFG_IOCTWAITBUF:
 		return wait_buffer(fgdev, (void __user *) arg);
 	default:
