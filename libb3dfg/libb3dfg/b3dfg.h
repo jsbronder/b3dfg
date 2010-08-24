@@ -28,8 +28,6 @@ int b3dfg_set_transmission(b3dfg_dev *dev, int enabled);
 
 int b3dfg_set_num_buffers(b3dfg_dev *dev, int buffers);
 int b3dfg_queue_buffer(b3dfg_dev *dev, int buffer);
-int b3dfg_poll_buffer(b3dfg_dev *dev, int buffer, unsigned int *dropped,
-	struct timeval *tv);
 int b3dfg_wait_buffer(b3dfg_dev *dev, int buffer, unsigned int timeout,
 	unsigned int *dropped, struct timeval *tv);
 

@@ -12,12 +12,6 @@
 #include <sys/ioctl.h>
 #include <sys/time.h>
 
-struct b3dfg_poll {
-	int buffer_idx;
-	unsigned int triplets_dropped;
-	struct timeval tv;
-};
-
 struct b3dfg_wait {
 	int buffer_idx;
 	unsigned int timeout;
@@ -30,7 +24,7 @@ struct b3dfg_wait {
 #define B3DFG_IOCTNUMBUFS       _IO(B3DFG_IOC_MAGIC, 2)
 #define B3DFG_IOCTTRANS         _IO(B3DFG_IOC_MAGIC, 3)
 #define B3DFG_IOCTQUEUEBUF      _IO(B3DFG_IOC_MAGIC, 4)
-#define B3DFG_IOCTPOLLBUF       _IOWR(B3DFG_IOC_MAGIC, 5, struct b3dfg_poll)
+//#define B3DFG_IOCTPOLLBUF       _IOWR(B3DFG_IOC_MAGIC, 5, struct b3dfg_poll)
 #define B3DFG_IOCTWAITBUF       _IOWR(B3DFG_IOC_MAGIC, 6, struct b3dfg_wait)
 #define B3DFG_IOCGWANDSTAT	_IOR(B3DFG_IOC_MAGIC, 7, int)
 

@@ -406,39 +406,6 @@ API_EXPORTED int b3dfg_queue_buffer(b3dfg_dev *dev, int buffer)
 	return r;
 }
 
-/** \ingroup io
- * Poll a buffer. This function can be used to determine whether a buffer is
- * pending or if it has been populated.
- *
- * If the buffer has been populated, this function returns 1 and the buffer
- * is automatically moved into the polled state. If the buffer has not been
- * populated (it is in the polled or pending states) this function returns 0
- * without taking further actions.
- * 
- * \param dev a device handle
- * \param buffer the buffer to poll
- * \param dropped output location for number of dropped triplets (optional, can
- * be NULL)
- * \returns 1 if the buffer was populated (and is now polled)
- * \returns 0 otherwise
- * \returns negative on error
- */
-API_EXPORTED int b3dfg_poll_buffer(b3dfg_dev *dev, int buffer,
-	unsigned int *dropped, struct timeval *tv)
-{
-	int r;
-	struct b3dfg_poll p = { .buffer_idx = buffer };
-
-	b3dfg_dbg("buffer %d", buffer);
-	r = ioctl(dev->fd, B3DFG_IOCTPOLLBUF, &p);
-	if (r < 0)
-		b3dfg_err("IOCTPOLLBUF(%d) failed r=%d errno=%d", buffer, r, errno);
-	else if (dropped)
-		*dropped = p.triplets_dropped;
-	if (tv)
-		memcpy(tv, &p.tv, sizeof(*tv));
-	return r;
-}
 
 /** \ingroup io
  * Wait on a pending buffer. This function can be used to sleep until a
