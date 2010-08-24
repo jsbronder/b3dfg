@@ -28,7 +28,7 @@ As the user queued the buffers in a certain order, he is aware of which buffer
 will become populated first, so he will monitor them through the wait_buffer
 and/or poll_buffer ioctls. These ioctls tell you when a buffer moves into the
 populated state. Once the user has been informed of this, the buffer is moved
-into the polled state. Polled buffers can then be requeued at any time.
+into the idle state. Polled buffers can then be requeued at any time.
 
 ioctls
 ======
@@ -36,7 +36,7 @@ ioctls
 B3DFG_IOCGFRMSZ: obtains the frame size (i.e. image resolution) for the device
 B3DFG_IOCTNUMBUFS: request a specific number of buffers
 B3DFG_IOCTTRANS: start or stop transmission
-B3DFG_IOCTQUEUEBUF: move buffer from polled to queued state
+B3DFG_IOCTQUEUEBUF: move buffer from idle to queued state
 B3DFG_IOCQPOLLBUF: non-blocking check to see if queued buffer has moved into
 populated state
 B3DFG_IOCQWAITBUF: blocking version of POLLBUF

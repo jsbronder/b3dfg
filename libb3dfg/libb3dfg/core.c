@@ -125,7 +125,7 @@
  * \section bufstate Buffer states
  *
  * A buffer is in 1 of 3 states at any moment in time:
- *  - <b>Polled</b> - the buffer is not queued, and if it was previously
+ *  - <b>Idle</b> - the buffer is not queued, and if it was previously
  *    queued, it has been dequeued and polled for its data.
  *  - <b>Pending</b> - the buffer has been queued with b3dfg_queue_buffer()
  *    and will be filled with image data at some point in the future.
@@ -133,30 +133,19 @@
  *    populated with image data. It is no longer queued.
  *
  * At the point when transmission is enabled, all buffers are reset to the
- * polled state.
+ * idle state.
  *
  * \section pollbuf Buffer polling
  *
  * Some time after a buffer is queued, it will move into the populated state.
  * When this state change occurs, your application will want to move the
- * buffer into the polled state and then access the data inside.
- *
- * In order to move a populated buffer into the polled state, call the
- * b3dfg_poll_buffer() function. It is legal to call this on a pending buffer
- * too - the return code indicates if any state change actually occured. In
- * other words, you can use this function to check if a previously-queued
- * buffer has been filled with data or if it is still pending.
- *
- * You should always ensure that a buffer moves into the polled state (by
- * checking the b3dfg_poll_buffer() return code) before accessing the data
- * contained within.
+ * buffer into the idle state and then access the data inside.
  *
  * The b3dfg_wait_buffer() can be used to sleep on a pending buffer - it will
  * put your application to sleep, wait until the buffer moves to the populated
  * state, poll it, and then wake up your application again. It is legal to call
  * this function on a buffer that is already populated (it will poll it and
- * return immediately). Also note that since wait includes poll, you do not
- * need to call b3dfg_poll_buffer() on a buffer that you have just waited on.
+ * return immediately).
  *
  * The underlying kernel driver also implements the <code>poll</code>
  * operation meaning that system calls such as poll() and select() are
@@ -170,7 +159,7 @@
  * similar, wait for activity, and then poll the buffer that you were expecting
  * to be filled. Process the data, do whatever else, then loop. Even though
  * you may know exactly which buffer was filled up when select() returned, it
- * is important that you poll the buffer to move it into the polled state so
+ * is important that you wait on the buffer to move it into the idle state so
  * that the slate is clean for the next iteration of the loop.
  *
  * \section bufmgmt Buffer ownership
@@ -184,7 +173,7 @@
  * Writing to any buffer from software will result in undefined behaviour,
  * regardless of ownership.
  *
- * Buffers are owned by the software when they are in the polled state. They
+ * Buffers are owned by the software when they are in the idle state. They
  * are owned by the hardware at all other times. In other words, queueing a
  * buffer transfers control to the hardware until you poll it and observe
  * that data has been captured.
@@ -196,7 +185,7 @@
  * in which case the frame grabber is forced to discard a set of 3 frames.
  * The frame grabber counts how many frame sets have been dropped and this
  * information can be passed on to you through the <tt>dropped</tt> output
- * parameter of the b3dfg_wait_buffer() and b3dfg_poll_buffer() functions.
+ * parameter of the b3dfg_wait_buffer() function.
  *
  * The dropped parameter is optional, you can pass NULL if you don't care.
  * However, if you do want to track dropped frames, you must pass an output
@@ -386,7 +375,7 @@ API_EXPORTED int b3dfg_set_num_buffers(b3dfg_dev *dev, int buffers)
 }
 
 /** \ingroup io
- * Queue a buffer. This moves a buffer from the polled state into the pending
+ * Queue a buffer. This moves a buffer from the idle state into the pending
  * state.
  *
  * \param dev a device handle
@@ -455,7 +444,7 @@ API_EXPORTED int b3dfg_poll_buffer(b3dfg_dev *dev, int buffer,
  * Wait on a pending buffer. This function can be used to sleep until a
  * specific buffer is populated.
  *
- * You can view this function as equivalent to calling b3dfg_poll_buffer() in
+ * You can view this function as equivalent to calling 'polling' the buffer in
  * a loop until it returns non-zero, except it is actually much more efficient
  * than that. This function causes the kernel to put your application to
  * sleep, then some clever scheduler magic ensures the process is only woken
@@ -465,7 +454,7 @@ API_EXPORTED int b3dfg_poll_buffer(b3dfg_dev *dev, int buffer,
  * success without sleeping.
  *
  * Upon success (i.e. frame data is present in buffer), this function call
- * automatically moves the buffer from the populated state to the polled state.
+ * automatically moves the buffer from the populated state to the idle state.
  *
  * \param dev a device handle
  * \param buffer the buffer to wait upon
@@ -473,7 +462,7 @@ API_EXPORTED int b3dfg_poll_buffer(b3dfg_dev *dev, int buffer,
  * \param dropped output location for number of dropped triplets (optional, can
  * be NULL). Only populated on return code >= 0.
  * \returns milliseconds remaining in timeout on success (buffer now contains
- * data and has been moved to polled state), 0 if there was no timeout
+ * data and has been moved to idle state), 0 if there was no timeout
  * \returns -ETIMEDOUT on timeout
  * \returns other negative code on other error
  */

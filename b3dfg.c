@@ -94,9 +94,10 @@ enum {
 };
 
 enum b3dfg_buffer_state {
-	B3DFG_BUFFER_POLLED = 0,
+	B3DFG_BUFFER_IDLE = 0,
 	B3DFG_BUFFER_PENDING,
 	B3DFG_BUFFER_POPULATED,
+	B3DFG_BUFFER_USER,
 };
 
 struct b3dfg_buffer {
@@ -225,7 +226,7 @@ static void dequeue_all_buffers(struct b3dfg_dev *fgdev)
 	int i;
 	for (i = 0; i < b3dfg_nbuf; i++) {
 		struct b3dfg_buffer *buf = &fgdev->buffers[i];
-		buf->state = B3DFG_BUFFER_POLLED;
+		buf->state = B3DFG_BUFFER_IDLE;
 		list_del_init(&buf->list);
 	}
 }
@@ -296,7 +297,7 @@ static int poll_buffer(struct b3dfg_dev *fgdev, void __user *arg)
 
 	if (likely(buf->state == B3DFG_BUFFER_POPULATED)) {
 		arg_out = 1;
-		buf->state = B3DFG_BUFFER_POLLED;
+		buf->state = B3DFG_BUFFER_IDLE;
 
 		/* IRQs already disabled by spin_lock_irqsave above. */
 		spin_lock(&fgdev->triplets_dropped_lock);
@@ -407,7 +408,7 @@ static int wait_buffer(struct b3dfg_dev *fgdev, void __user *arg)
 		goto out_unlock;
 	}
 
-	buf->state = B3DFG_BUFFER_POLLED;
+	buf->state = B3DFG_BUFFER_IDLE;
 
 out_triplets_dropped:
 
@@ -1093,3 +1094,5 @@ static void __exit b3dfg_module_exit(void)
 
 module_init(b3dfg_module_init);
 module_exit(b3dfg_module_exit);
+
+// vim: noet
