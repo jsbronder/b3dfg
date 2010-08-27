@@ -55,10 +55,9 @@ MODULE_LICENSE("GPL");
 #define B3DFG_IOCGFRMSZ		_IOR(B3DFG_IOC_MAGIC, 1, int)
 #define B3DFG_IOCTNUMBUFS	_IO(B3DFG_IOC_MAGIC, 2)
 #define B3DFG_IOCTTRANS		_IO(B3DFG_IOC_MAGIC, 3)
-#define B3DFG_IOCTQUEUEBUF	_IO(B3DFG_IOC_MAGIC, 4)
-//#define B3DFG_IOCTPOLLBUF	_IOWR(B3DFG_IOC_MAGIC, 5, struct b3dfg_poll)
-#define B3DFG_IOCTWAITBUF	_IOWR(B3DFG_IOC_MAGIC, 6, struct b3dfg_wait)
-#define B3DFG_IOCGWANDSTAT	_IOR(B3DFG_IOC_MAGIC, 7, int)
+#define B3DFG_IOCGWANDSTAT	_IOR(B3DFG_IOC_MAGIC, 4, int)
+#define B3DFG_IOCTRELBUF	_IO(B3DFG_IOC_MAGIC, 5)
+#define B3DFG_IOCTGETBUF	_IOWR(B3DFG_IOC_MAGIC, 6, struct b3dfg_wait)
 
 enum {
 	/* number of 4kb pages per frame */
@@ -117,13 +116,15 @@ struct b3dfg_dev {
 	unsigned int frame_size;
 
 	/*
-	 * Protects buffer state, including buffer_queue, triplet_ready,
+	 * Protects buffer state, including triplet_ready, cur_dma_buf_idx,
 	 * cur_dma_frame_idx & cur_dma_frame_addr.
 	 */
 	spinlock_t buffer_lock;
 	struct b3dfg_buffer *buffers;
-	struct list_head buffer_queue;
 
+	/* Current dma buffer */
+	int cur_dma_buf_idx;
+	
 	/* Last frame in triplet transferred (-1 if none). */
 	int cur_dma_frame_idx;
 
@@ -189,14 +190,13 @@ static void b3dfg_write32(struct b3dfg_dev *fgdev, u16 reg, u32 value)
  * Program EC220 for transfer of a specific frame.
  * Called with buffer_lock held.
  */
-static int setup_frame_transfer(struct b3dfg_dev *fgdev,
-	struct b3dfg_buffer *buf, int frame)
+static int setup_frame_transfer(struct b3dfg_dev *fgdev, int frame)
 {
 	unsigned char *frm_addr;
 	dma_addr_t frm_addr_dma;
 	unsigned int frm_size = fgdev->frame_size;
 
-	frm_addr = buf->frame[frame];
+	frm_addr = fgdev->buffers[fgdev->cur_dma_buf_idx].frame[frame];
 	frm_addr_dma = pci_map_single(fgdev->pdev, frm_addr,
 					  frm_size, PCI_DMA_FROMDEVICE);
 	if (pci_dma_mapping_error(fgdev->pdev, frm_addr_dma))
@@ -215,52 +215,60 @@ static int setup_frame_transfer(struct b3dfg_dev *fgdev,
 }
 
 /* Caller should hold buffer lock */
+static int find_free_buffer(struct b3dfg_dev *fgdev, int *idx)
+{
+	int i;
+
+	*idx = -1;
+	for (i = 0; i < b3dfg_nbuf; i++) {
+		if (fgdev->buffers[i].state == B3DFG_BUFFER_IDLE) {
+			*idx = i;
+			break;
+		} else if (fgdev->buffers[i].state == B3DFG_BUFFER_POPULATED &&
+					(*idx == -1 || 
+					time_before(fgdev->buffers[i].jiffies, fgdev->buffers[*idx].jiffies)))
+			*idx = i;
+	}
+	return *idx != -1 ? 0 : -EBUSY;
+}
+
+/* Caller should hold buffer lock */
+static int find_newest_buffer(struct b3dfg_dev *fgdev, int *idx)
+{
+	int i;
+	int dropped = 0;
+
+	*idx = -1;
+	for (i = 0; i < b3dfg_nbuf; i++) {
+		if (fgdev->buffers[i].state == B3DFG_BUFFER_POPULATED) {
+			if (*idx == -1)
+				*idx = i;
+			else if (time_after(fgdev->buffers[i].jiffies, fgdev->buffers[*idx].jiffies)) {
+				fgdev->buffers[*idx].state = B3DFG_BUFFER_IDLE;
+				*idx = i;
+				dropped++;
+			} else {
+				fgdev->buffers[i].state = B3DFG_BUFFER_IDLE;
+				dropped++;
+			}
+		}
+	}
+
+	if (dropped) {
+		spin_lock(&fgdev->triplets_dropped_lock);
+		fgdev->triplets_dropped++;
+		spin_unlock(&fgdev->triplets_dropped_lock);
+	}
+
+	return *idx != -1 ? 0 : -EBUSY;
+}
+			
+/* Caller should hold buffer lock */
 static void dequeue_all_buffers(struct b3dfg_dev *fgdev)
 {
 	int i;
-	for (i = 0; i < b3dfg_nbuf; i++) {
-		struct b3dfg_buffer *buf = &fgdev->buffers[i];
-		buf->state = B3DFG_BUFFER_IDLE;
-		list_del_init(&buf->list);
-	}
-}
-
-/* queue a buffer to receive data */
-static int queue_buffer(struct b3dfg_dev *fgdev, int bufidx)
-{
-	struct device *dev = &fgdev->pdev->dev;
-	struct b3dfg_buffer *buf;
-	unsigned long flags;
-	int r = 0;
-
-	spin_lock_irqsave(&fgdev->buffer_lock, flags);
-	if (bufidx < 0 || bufidx >= b3dfg_nbuf) {
-		dev_dbg(dev, "Invalid buffer index, %d\n", bufidx);
-		r = -ENOENT;
-		goto out;
-	}
-	buf = &fgdev->buffers[bufidx];
-
-	if (unlikely(buf->state == B3DFG_BUFFER_PENDING)) {
-		dev_dbg(dev, "buffer %d is already queued\n", bufidx);
-		r = -EINVAL;
-		goto out;
-	}
-
-	buf->state = B3DFG_BUFFER_PENDING;
-	list_add_tail(&buf->list, &fgdev->buffer_queue);
-
-	if (fgdev->transmission_enabled && fgdev->triplet_ready) {
-		dev_dbg(dev, "triplet is ready, pushing immediately\n");
-		fgdev->triplet_ready = 0;
-		r = setup_frame_transfer(fgdev, buf, 0);
-		if (r)
-			dev_err(dev, "unable to map DMA buffer\n");
-	}
-
-out:
-	spin_unlock_irqrestore(&fgdev->buffer_lock, flags);
-	return r;
+	for (i = 0; i < b3dfg_nbuf; i++)
+		fgdev->buffers[i].state = B3DFG_BUFFER_IDLE;
 }
 
 static unsigned long get_cstate_change(struct b3dfg_dev *fgdev)
@@ -273,7 +281,7 @@ static unsigned long get_cstate_change(struct b3dfg_dev *fgdev)
 	return when;
 }
 
-static int is_event_ready(struct b3dfg_dev *fgdev, struct b3dfg_buffer *buf,
+static int is_event_ready(struct b3dfg_dev *fgdev, int *idx,
 			  unsigned long when)
 {
 	int result;
@@ -282,7 +290,7 @@ static int is_event_ready(struct b3dfg_dev *fgdev, struct b3dfg_buffer *buf,
 	spin_lock_irqsave(&fgdev->buffer_lock, flags);
 	spin_lock(&fgdev->cstate_lock);
 	result = (!fgdev->transmission_enabled ||
-		  buf->state == B3DFG_BUFFER_POPULATED ||
+		  find_newest_buffer(fgdev, idx) == 0 ||
 		  when != fgdev->cstate_tstamp);
 	spin_unlock(&fgdev->cstate_lock);
 	spin_unlock_irqrestore(&fgdev->buffer_lock, flags);
@@ -290,14 +298,41 @@ static int is_event_ready(struct b3dfg_dev *fgdev, struct b3dfg_buffer *buf,
 	return result;
 }
 
-/* sleep until a specific buffer becomes populated */
-static int wait_buffer(struct b3dfg_dev *fgdev, void __user *arg)
+static int release_buffer(struct b3dfg_dev *fgdev, int bufidx)
+{
+	struct device *dev = &fgdev->pdev->dev;
+	unsigned long flags;
+	int r = 0;
+
+	dev_dbg(dev, "release_buffer() %d\n", bufidx);
+	spin_lock_irqsave(&fgdev->buffer_lock, flags);
+
+	if (bufidx < 0 || bufidx >= b3dfg_nbuf) {
+		dev_dbg(dev, "Invalid buffer index, %d\n", bufidx);
+		r = -ENOENT;
+		goto out;
+	}
+
+	if (unlikely(fgdev->buffers[bufidx].state != B3DFG_BUFFER_USER)) {
+		dev_warn(dev, "buffer %d is already released\n", bufidx);
+		r = -EINVAL;
+		goto out;
+	}
+
+	fgdev->buffers[bufidx].state = B3DFG_BUFFER_IDLE;
+
+out:
+	spin_unlock_irqrestore(&fgdev->buffer_lock, flags);
+	return r;
+}
+
+
+static int get_buffer(struct b3dfg_dev *fgdev, void __user *arg)
 {
 	struct device *dev = &fgdev->pdev->dev;
 	struct b3dfg_wait w;
-	struct b3dfg_buffer *buf;
 	unsigned long flags, when;
-	int r;
+	int idx, r = 0;
 
 	if (copy_from_user(&w, arg, sizeof(w)))
 		return -EFAULT;
@@ -307,24 +342,17 @@ static int wait_buffer(struct b3dfg_dev *fgdev, void __user *arg)
 		return -EINVAL;
 	}
 
-	if (w.buffer_idx < 0 || w.buffer_idx >= b3dfg_nbuf)
-		return -ENOENT;
-
-	buf = &fgdev->buffers[w.buffer_idx];
-
 	spin_lock_irqsave(&fgdev->buffer_lock, flags);
-
-	if (buf->state == B3DFG_BUFFER_POPULATED) {
+	if ( likely(find_newest_buffer(fgdev, &idx) == 0 )) {
 		r = w.timeout;
 		goto out_triplets_dropped;
 	}
-
 	spin_unlock_irqrestore(&fgdev->buffer_lock, flags);
 
 	when = get_cstate_change(fgdev);
 	if (w.timeout > 0) {
 		r = wait_event_interruptible_timeout(fgdev->buffer_waitqueue,
-			is_event_ready(fgdev, buf, when),
+			is_event_ready(fgdev, &idx, when),
 			(w.timeout * HZ) / 1000);
 
 		if (unlikely(r < 0))
@@ -333,7 +361,7 @@ static int wait_buffer(struct b3dfg_dev *fgdev, void __user *arg)
 		w.timeout = r * 1000 / HZ;
 	} else {
 		r = wait_event_interruptible(fgdev->buffer_waitqueue,
-			is_event_ready(fgdev, buf, when));
+			is_event_ready(fgdev, &idx, when));
 
 		if (unlikely(r)) {
 			r = -ERESTARTSYS;
@@ -349,21 +377,22 @@ static int wait_buffer(struct b3dfg_dev *fgdev, void __user *arg)
 
 	spin_lock_irqsave(&fgdev->buffer_lock, flags);
 
-	if (buf->state != B3DFG_BUFFER_POPULATED) {
+	if (fgdev->buffers[idx].state != B3DFG_BUFFER_POPULATED) {
 		r = -ETIMEDOUT;
 		goto out_unlock;
 	}
 
-	buf->state = B3DFG_BUFFER_IDLE;
-
 out_triplets_dropped:
+	dev_dbg(dev, "get_buffer() got %d\n", idx);
+	fgdev->buffers[idx].state = B3DFG_BUFFER_USER;
+	jiffies_to_timeval(fgdev->buffers[idx].jiffies, &w.tv);
+	w.buffer_idx = idx;
 
 	/* IRQs already disabled by spin_lock_irqsave above. */
 	spin_lock(&fgdev->triplets_dropped_lock);
 	w.triplets_dropped = fgdev->triplets_dropped;
 	fgdev->triplets_dropped = 0;
 	spin_unlock(&fgdev->triplets_dropped_lock);
-	jiffies_to_timeval(buf->jiffies, &w.tv);
 
 out_unlock:
 	spin_unlock_irqrestore(&fgdev->buffer_lock, flags);
@@ -441,6 +470,7 @@ static int enable_transmission(struct b3dfg_dev *fgdev)
 
 	fgdev->triplet_ready = 0;
 	fgdev->cur_dma_frame_idx = -1;
+	fgdev->cur_dma_buf_idx = -1;
 	fgdev->transmission_enabled = 1;
 
 	spin_unlock_irqrestore(&fgdev->buffer_lock, flags);
@@ -561,23 +591,20 @@ static void handle_cstate_change(struct b3dfg_dev *fgdev)
 /* Called with buffer_lock held. */
 static void transfer_complete(struct b3dfg_dev *fgdev)
 {
-	struct b3dfg_buffer *buf;
 	struct device *dev = &fgdev->pdev->dev;
 
 	pci_unmap_single(fgdev->pdev, fgdev->cur_dma_frame_addr,
 			 fgdev->frame_size, PCI_DMA_FROMDEVICE);
 	fgdev->cur_dma_frame_addr = 0;
 
-	buf = list_entry(fgdev->buffer_queue.next, struct b3dfg_buffer, list);
 	dev_dbg(dev, "handle frame completion\n");
 	if (fgdev->cur_dma_frame_idx == B3DFG_FRAMES_PER_BUFFER - 1) {
-
 		/* last frame of that triplet completed */
 		dev_dbg(dev, "triplet completed\n");
-		buf->state = B3DFG_BUFFER_POPULATED;
-		buf->jiffies = jiffies;
-		list_del_init(&buf->list);
+		fgdev->buffers[fgdev->cur_dma_buf_idx].state = B3DFG_BUFFER_POPULATED;
+		fgdev->buffers[fgdev->cur_dma_buf_idx].jiffies = jiffies;
 		wake_up_interruptible(&fgdev->buffer_waitqueue);
+		fgdev->cur_dma_buf_idx = -1;
 	}
 }
 
@@ -590,15 +617,23 @@ static void transfer_complete(struct b3dfg_dev *fgdev)
  */
 static bool setup_next_frame_transfer(struct b3dfg_dev *fgdev, int idx)
 {
-	struct b3dfg_buffer *buf;
 	struct device *dev = &fgdev->pdev->dev;
 	bool need_ack = 1;
 
 	dev_dbg(dev, "program DMA transfer for next frame: %d\n", idx);
 
-	buf = list_entry(fgdev->buffer_queue.next, struct b3dfg_buffer, list);
+	if (fgdev->cur_dma_buf_idx == -1) {
+		/* Find a new buffer to pack the triplet into */
+		while (find_free_buffer(fgdev, &fgdev->cur_dma_buf_idx) != 0) {
+			/* TOFIX:  Can loop forever */
+			dev_warn(dev, "Unable to find free buffer.\n");
+		}
+		fgdev->buffers[fgdev->cur_dma_buf_idx].state = B3DFG_BUFFER_PENDING;
+		dev_dbg(dev, "Preparing to fill buffer %d\n", fgdev->cur_dma_buf_idx);
+	}
+
 	if (idx == fgdev->cur_dma_frame_idx + 2) {
-		if (setup_frame_transfer(fgdev, buf, idx - 1))
+		if (setup_frame_transfer(fgdev, idx - 1))
 			dev_err(dev, "unable to map DMA buffer\n");
 		need_ack = 0;
 	} else {
@@ -650,13 +685,6 @@ static irqreturn_t b3dfg_intr(int irq, void *dev_id)
 	}
 
 	spin_lock(&fgdev->buffer_lock);
-	if (unlikely(list_empty(&fgdev->buffer_queue))) {
-
-		/* FIXME need more sanity checking here */
-		dev_info(dev, "buffer not ready for next transfer\n");
-		fgdev->triplet_ready = 1;
-		goto out_unlock;
-	}
 
 	/* Has a frame transfer been completed? */
 	if (sts & 0x4) {
@@ -726,10 +754,10 @@ static long b3dfg_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		return get_wand_status(fgdev, (int __user *) arg);
 	case B3DFG_IOCTTRANS:
 		return set_transmission(fgdev, (int) arg);
-	case B3DFG_IOCTQUEUEBUF:
-		return queue_buffer(fgdev, (int) arg);
-	case B3DFG_IOCTWAITBUF:
-		return wait_buffer(fgdev, (void __user *) arg);
+	case B3DFG_IOCTRELBUF:
+		return release_buffer(fgdev, (int) arg);
+	case B3DFG_IOCTGETBUF:
+		return get_buffer(fgdev, (void __user *) arg);
 	default:
 		dev_dbg(&fgdev->pdev->dev, "unrecognised ioctl %x\n", cmd);
 		return -EINVAL;
@@ -832,7 +860,6 @@ static int b3dfg_init_dev(struct b3dfg_dev *fgdev)
 		INIT_LIST_HEAD(&buf->list);
 	}
 
-	INIT_LIST_HEAD(&fgdev->buffer_queue);
 	init_waitqueue_head(&fgdev->buffer_waitqueue);
 	spin_lock_init(&fgdev->buffer_lock);
 	spin_lock_init(&fgdev->cstate_lock);
