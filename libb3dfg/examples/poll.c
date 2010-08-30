@@ -12,14 +12,13 @@
 #include <poll.h>
 
 #include <libb3dfg/b3dfg.h>
+#include <examples/serial_cmd.h>
 
 #define NUM_BUFFERS 4
 
 static b3dfg_dev *dev;
 static unsigned char *mapping;
 static unsigned int frame_size;
-
-static int aborted = 0;
 
 static void write_frame(int buffer, int frame)
 {
@@ -44,12 +43,12 @@ static void write_to_file(int buffer)
 
 int main(void)
 {
-	int i;
+	int i, buffer;
 	int r = 1;
+    int fd = -1;
 	struct pollfd pfd = { .events = POLLIN };
-	int next_buf = 0;
-	int nodata = 0;
 	unsigned int dropped;
+    int triggering = 0;
 
 	dev = b3dfg_open(0);
 	if (!dev) {
@@ -58,11 +57,6 @@ int main(void)
 	}
 
 	frame_size = b3dfg_get_frame_size(dev);
-	r = b3dfg_set_num_buffers(dev, NUM_BUFFERS);
-	if (r) {
-		fprintf(stderr, "set_num_buffers failed\n");
-		goto out;
-	}
 
 	mapping = b3dfg_map_buffers(dev, 0);
 	if (!mapping) {
@@ -70,13 +64,15 @@ int main(void)
 		goto out;
 	}
 
-	for (i = 0; i < NUM_BUFFERS; i++) {
-		r = b3dfg_queue_buffer(dev, i);
-		if (r) {
-			fprintf(stderr, "queue_buffer failed\n");
-			goto out;
-		}
-	}
+    if ( (fd = open_serial("/dev/ttyUSB0")) <= 0 ) {
+        r = -1;
+        goto out;
+    }
+
+    if ( (triggering = send_cmd(fd, START_TRIGGERS)) == -1){
+        r = -1;
+        goto out;
+    }
 
 	r = b3dfg_set_transmission(dev, 1);
 	if (r) {
@@ -85,7 +81,7 @@ int main(void)
 	}
 
 	pfd.fd = b3dfg_get_fd(dev);
-	while (!aborted) {
+    for (i = 0; i < 3; i++ ) {
 		r = poll(&pfd, 1, 1000);
 		if (r < 0) {
 			fprintf(stderr, "poll returned %d\n", r);
@@ -93,40 +89,33 @@ int main(void)
 		}
 		if (!(pfd.revents & POLLIN)) {
 			printf("poll returned with no data?\n");
-			if (++nodata == 3) {
-				printf("aborting\n");
-				break;
-			}
-			continue;
+            r = -1;
+            goto out;
 		}
-		r = b3dfg_wait_buffer(dev, next_buf, 1000, &dropped, NULL);
+
+		r = b3dfg_get_buffer(dev, &buffer, 1000, &dropped, NULL);
 		if (r < 0) {
 			fprintf(stderr, "poll failed error %d\n", r);
 			break;
 		}
 		if (r == 0) {
-			fprintf(stderr, "buffer %d not ready after poll()?\n", next_buf);
+			fprintf(stderr, "buffer not ready after poll()?\n");
 			break;
 		}
 		if (dropped > 0) {
 			printf("%d frame(s) dropped\n", dropped);
 		}
-		write_to_file(next_buf);
-		r = b3dfg_queue_buffer(dev, next_buf);
-		if (r < 0) {
-			fprintf(stderr, "buffer requeue failed %d\n", r);
-			break;
-		}
-		nodata = 0;
-		next_buf++;
-		if (next_buf >= NUM_BUFFERS)
-			next_buf = 0;
+		write_to_file(buffer);
+        b3dfg_release_buffer(dev, buffer);
 	}
 
 	r = 0;
 out:
-	b3dfg_set_transmission(dev, 0);
-	b3dfg_unmap_buffers(dev);
+    if (triggering)
+        send_cmd(fd, STOP_TRIGGERS);
+    if (dev)	
+        b3dfg_unmap_buffers(dev);
+    b3dfg_set_transmission(dev, 0);
 	b3dfg_close(dev);
 	return r;
 }

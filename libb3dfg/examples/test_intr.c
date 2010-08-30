@@ -16,35 +16,15 @@
 #include <examples/serial_cmd.h>
 
 #define NUM_BUFFERS 3
+#define RUNTIME 60
 
 static b3dfg_dev *dev;
 static unsigned char *mapping;
 static unsigned int frame_size;
 
-static void write_frame(int buffer, int frame)
-{
-	char filename[50];
-	FILE *fd;
-	int num = (buffer * 3) + frame;
-
-	sprintf(filename, "cap%02d.pgm", num);
-	fd = fopen(filename, "w");
-	fprintf(fd, "P5 1024 768 255 ");
-	fwrite(mapping + (buffer * frame_size * 3) + (frame_size * frame), 1,
-		frame_size, fd);
-	fclose(fd);
-}
-
-static void write_to_file(int buffer)
-{
-	write_frame(buffer, 0);
-	write_frame(buffer, 1);
-	write_frame(buffer, 2);
-}
-
 int main(void)
 {
-	int i, buf, fd;
+	int fd;
 	int r = 1;
     int triggering = 0;
 
@@ -81,22 +61,8 @@ int main(void)
 		goto out;
 	}
 
-	for (i = 0; i < NUM_BUFFERS; i++) {
-        while (true) {
-		    r = b3dfg_get_buffer(dev, &buf, 1000, NULL, NULL);
-		    if (r < 0) {
-			    fprintf(stderr, "get_buffer failed\n");
-			    goto out;
-		    } else if (buf == i) {
-                printf("Got buffer %d\n", buf);
-		        write_to_file(i);
-                b3dfg_release_buffer(dev, buf);
-                break;
-            }
-            b3dfg_release_buffer(dev, buf);
-            usleep( rand() % 4000 );
-        }
-	}
+    printf("Allowing triggering to run for %d seconds\n", RUNTIME);
+    sleep(RUNTIME);
 
 	r = 0;
 out:

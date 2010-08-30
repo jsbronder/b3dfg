@@ -27,8 +27,8 @@ unsigned int b3dfg_get_frame_size(b3dfg_dev *dev);
 int b3dfg_set_transmission(b3dfg_dev *dev, int enabled);
 
 int b3dfg_set_num_buffers(b3dfg_dev *dev, int buffers);
-int b3dfg_queue_buffer(b3dfg_dev *dev, int buffer);
-int b3dfg_wait_buffer(b3dfg_dev *dev, int buffer, unsigned int timeout,
+int b3dfg_release_buffer(b3dfg_dev *dev, int buffer);
+int b3dfg_get_buffer(b3dfg_dev *dev, int *buffer, unsigned int timeout,
 	unsigned int *dropped, struct timeval *tv);
 
 unsigned char *b3dfg_map_buffers(b3dfg_dev *dev, int prefault);

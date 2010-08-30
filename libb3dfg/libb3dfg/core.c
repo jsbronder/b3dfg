@@ -51,7 +51,7 @@
  * The optics capture 3 images for any one frame, which are referred to
  * as the red, green and blue channels (even though they do not actually
  * represent colours: they are 3 distinct frames). A group of 3 frames is
- * referred to as a buffer.
+ * referred to as a buffer or triplet.
  *
  * You can gain access to the frame data within buffers by <em>mapping</em>
  * the buffers into your process using b3dfg_map_buffers(). This function
@@ -110,42 +110,28 @@
  *
  * \section transfer Data transfer
  *
- * When you are ready to receive data into a buffer, you must <em>queue</em>
- * it with b3dfg_queue_buffer(). A queued buffer will be filled with 3 frames
- * of image data at some point in the future, whereas an unqueued buffer will
- * not be touched by the underlying driver or hardware.
- *
- * It is legal to queue multiple buffers, and it is in fact necessary for
- * performance: unless there are free buffers available, frames will be
- * dropped. Buffers will be filled in the order that they were queued.
- *
- * Buffers are dequeued when they are filled (populated). Your application
- * must then poll the buffer before accessing the data.
+ * When you are ready to receive data you must request a lock on associated
+ * buffer with b3dfg_get_buffer().  This lets the driver know that the buffer is
+ * being accessed by userspace and it will not touch the buffer until it is
+ * released with b3dfg_release_buffer().  Due to triple buffering in the driver
+ * b3dfg_get_buffer() will almost always return immediately.  Before requesting
+ * another buffer, b3dfg_release_buffer() should be called in order to insure
+ * the driver always has two free buffers to use.
  *
  * \section bufstate Buffer states
  *
  * A buffer is in 1 of 3 states at any moment in time:
- *  - <b>Idle</b> - the buffer is not queued, and if it was previously
- *    queued, it has been dequeued and polled for its data.
- *  - <b>Pending</b> - the buffer has been queued with b3dfg_queue_buffer()
- *    and will be filled with image data at some point in the future.
- *  - <b>Populated</b> - the buffer was previously queued and has been
- *    populated with image data. It is no longer queued.
+ *  - <b>Idle</b> - the buffer is not in use by userland or the driver.
+ *  - <b>Pending</b> - the buffer is currently being used to serve
+ *    DMA requests from the board.
+ *  - <b>Populated</b> - the buffer has been filled and is ready to be
+ *    sent to userspace.
+ *  - <b>User</b> - the buffer is currently being used by this library.
  *
  * At the point when transmission is enabled, all buffers are reset to the
  * idle state.
  *
  * \section pollbuf Buffer polling
- *
- * Some time after a buffer is queued, it will move into the populated state.
- * When this state change occurs, your application will want to move the
- * buffer into the idle state and then access the data inside.
- *
- * The b3dfg_wait_buffer() can be used to sleep on a pending buffer - it will
- * put your application to sleep, wait until the buffer moves to the populated
- * state, poll it, and then wake up your application again. It is legal to call
- * this function on a buffer that is already populated (it will poll it and
- * return immediately).
  *
  * The underlying kernel driver also implements the <code>poll</code>
  * operation meaning that system calls such as poll() and select() are
@@ -153,14 +139,6 @@
  * can be monitored for read events (<code>POLLIN</code>). If one of these 
  * system calls indicates activity on the file descriptor it means that at
  * least one buffer is in the populated state.
- *
- * To use the poll() implementation, your application will want to track which
- * buffer is going to be filled up next. Then call poll() or select() or
- * similar, wait for activity, and then poll the buffer that you were expecting
- * to be filled. Process the data, do whatever else, then loop. Even though
- * you may know exactly which buffer was filled up when select() returned, it
- * is important that you wait on the buffer to move it into the idle state so
- * that the slate is clean for the next iteration of the loop.
  *
  * \section bufmgmt Buffer ownership
  *
@@ -173,19 +151,20 @@
  * Writing to any buffer from software will result in undefined behaviour,
  * regardless of ownership.
  *
- * Buffers are owned by the software when they are in the idle state. They
- * are owned by the hardware at all other times. In other words, queueing a
- * buffer transfers control to the hardware until you poll it and observe
- * that data has been captured.
+ * Buffers are owned by the software when they are in the user state. They
+ * are owned by the hardware at all other times. In other words, releasing
+ * a buffer transfers control to the hardware until it is later delivered
+ * back to the user as a result of b3dfg_get_buffer().
  *
  * \section dropped Tracking dropped frames
  *
- * If the software does not queue buffers quickly enough, there is a chance
- * that the kernel will not be able to present any memory to the frame grabber,
- * in which case the frame grabber is forced to discard a set of 3 frames.
- * The frame grabber counts how many frame sets have been dropped and this
- * information can be passed on to you through the <tt>dropped</tt> output
- * parameter of the b3dfg_wait_buffer() function.
+ * If the software does not request buffers quickly enough, there is a chance
+ * that the kernel will drop a previously filled buffer in favor of the newest
+ * coming from the board.  In this case, the <tt>dropped</tt> parameter of
+ * b3dfg_get_buffer() will reflect the number of buffers dropped since 
+ * transmission was enabled.  If the driver itself is unable to keep up with
+ * the board (this should not occur), the board will also report the number of
+ * buffers it has dropped.  This count is also appended to <tt>dropped</tt>.
  *
  * The dropped parameter is optional, you can pass NULL if you don't care.
  * However, if you do want to track dropped frames, you must pass an output
@@ -193,6 +172,15 @@
  * frame triplet once, and if the library does receive information that
  * frames have been dropped but cannot pass it on, then that information will
  * be lost (it does not accumulate).
+ *
+ * \section tv Timestamps
+ *
+ * When the driver completes the DMA transfer of a buffer, it also keeps a
+ * record of when this occured.  You can access this timestamp by passing a
+ * non-NULL struct timeval as the <tt>tv</tt> parameter of b3dfg_get_buffer().
+ * Timestamps are tracked using the jiffies counter within the kernel and are
+ * precise to milliseconds.
+ *
  */
 
 /** @defgroup core Core operations */
@@ -265,7 +253,7 @@ API_EXPORTED b3dfg_dev *b3dfg_open(unsigned int idx)
 	b3dfg_dbg("opened fd=%d frame_size=%d", fd, frame_size);
 	dev->fd = fd;
 	dev->frame_size = frame_size;
-	dev->num_buffers = 2;
+	dev->num_buffers = B3DFG_NUM_BUFFERS;
 	dev->mapping = NULL;
 	return dev;
 }
@@ -375,32 +363,33 @@ API_EXPORTED int b3dfg_set_num_buffers(b3dfg_dev *dev, int buffers)
 }
 
 /** \ingroup io
- * Queue a buffer. This moves a buffer from the idle state into the pending
- * state.
+ * Release a buffer. This moves a buffer from the user state into the idle state
+ * state.  This function should be called after processing on any buffer recieved
+ * via b3dfg_get_buffer() and before said function is called again.
  *
  * \param dev a device handle
- * \param buffer the buffer to queue
- * \returns 0 on buffer queued, 1 if the buffer is already queued, negative on error
+ * \param buffer the buffer to release. 
+ * \returns 0 on buffer release, 1 if the buffer was already released and negative
+ * on error
  */
-API_EXPORTED int b3dfg_queue_buffer(b3dfg_dev *dev, int buffer)
+API_EXPORTED int b3dfg_release_buffer(b3dfg_dev *dev, int buffer)
 {
 	int r;
 	
-	b3dfg_dbg("buffer %d", buffer);
-	r = ioctl(dev->fd, B3DFG_IOCTQUEUEBUF, buffer);
+	r = ioctl(dev->fd, B3DFG_IOCTRELBUF, buffer);
 	if (r < 0) {
 		if (errno == EINVAL){
 			/*
-			 * It's possible that the caller has already queued this buffer
+			 * It's possible that the caller has already released this buffer
 			 * and is attempting to do so again.  In this case, the driver
 			 * will return EINVAL.  This is a mistake in the caller's code,
 			 * so we don't return an error here.
 			 */
 			// TOFIX:  We need real return codes
-			b3dfg_dbg("IOCTLQUEUEBUF:  buffer %d was already queued", buffer);
+			b3dfg_dbg("IOCTRELBUF:  buffer %d was already released", buffer);
 			r = 1;
 		} else {
-			b3dfg_err("IOCTQUEUEBUF(%d) failed r=%d errno=%d", buffer, r, errno);
+			b3dfg_err("IOCTRELBUF(%d) failed r=%d errno=%d", buffer, r, errno);
 		}
 	}
 	return r;
@@ -408,51 +397,44 @@ API_EXPORTED int b3dfg_queue_buffer(b3dfg_dev *dev, int buffer)
 
 
 /** \ingroup io
- * Wait on a pending buffer. This function can be used to sleep until a
- * specific buffer is populated.
- *
- * You can view this function as equivalent to calling 'polling' the buffer in
- * a loop until it returns non-zero, except it is actually much more efficient
- * than that. This function causes the kernel to put your application to
- * sleep, then some clever scheduler magic ensures the process is only woken
- * up again when frame data is ready.
- * 
- * If the buffer was already populated, this function immediately returns
- * success without sleeping.
+ * Get the newest buffer.  If no buffers are available (very rare aside from 
+ * immediately after starting transmission) this function will sleep until a
+ * buffer is ready.
  *
  * Upon success (i.e. frame data is present in buffer), this function call
- * automatically moves the buffer from the populated state to the idle state.
+ * automatically moves the buffer from the populated state to the user state.
  *
  * \param dev a device handle
- * \param buffer the buffer to wait upon
+ * \param buffer the buffer returned from the driver, used with release_buffer()
  * \param timeout timeout in milliseconds, or 0 for unlimited timeout
  * \param dropped output location for number of dropped triplets (optional, can
  * be NULL). Only populated on return code >= 0.
+ * \param tv timestamp from when the buffer was received (optional, can be NULL).
  * \returns milliseconds remaining in timeout on success (buffer now contains
- * data and has been moved to idle state), 0 if there was no timeout
+ * data and has been moved to user state), 0 if there was no timeout
  * \returns -ETIMEDOUT on timeout
  * \returns other negative code on other error
  */
-API_EXPORTED int b3dfg_wait_buffer(b3dfg_dev *dev, int buffer,
+API_EXPORTED int b3dfg_get_buffer(b3dfg_dev *dev, int *buffer,
 	unsigned int timeout, unsigned int *dropped, struct timeval *tv)
 {
-	struct b3dfg_wait w = { .buffer_idx = buffer, .timeout = timeout };
+	struct b3dfg_wait w = { .timeout = timeout };
 	int r;
 
-	b3dfg_dbg("buffer %d timeout %d", buffer, timeout);
-	r = ioctl(dev->fd, B3DFG_IOCTWAITBUF, &w);
-	b3dfg_dbg("returned %d", r);
+	r = ioctl(dev->fd, B3DFG_IOCTGETBUF, &w);
 	if (r < 0) {
 		if (timeout && errno == ETIMEDOUT) {
 			b3dfg_dbg("timed out");
 			return -ETIMEDOUT;
 		}
-		b3dfg_err("IOCQWAITBUF(%d) failed r=%d errno=%d",
+		b3dfg_err("IOCTGETBUF(%d) failed r=%d errno=%d",
 			buffer, r, errno);
 	} else if (dropped)
 		*dropped = w.triplets_dropped;
 	if (tv)
 		memcpy(tv, &w.tv, sizeof(*tv));
+	if (buffer)
+		*buffer = w.buffer_idx;
 	return r;
 }
 
@@ -475,8 +457,10 @@ API_EXPORTED int b3dfg_wait_buffer(b3dfg_dev *dev, int buffer,
  * performance penalty occurs later.  \returns the address of the new mapping
  * \returns NULL on error
  */
-API_EXPORTED unsigned char *b3dfg_map_buffers(b3dfg_dev *dev, int prefault) {
-unsigned char *mapping; int flags = MAP_SHARED;
+API_EXPORTED unsigned char *b3dfg_map_buffers(b3dfg_dev *dev, int prefault)
+{
+	unsigned char *mapping;
+	int flags = MAP_SHARED;
 
 	if (dev->mapping) {
 		b3dfg_err("buffers already mapped");
