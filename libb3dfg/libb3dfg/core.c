@@ -348,21 +348,6 @@ API_EXPORTED int b3dfg_set_transmission(b3dfg_dev *dev, int enabled)
 }
 
 /** \ingroup io
- * Set the number of buffers to potentially be used for later I/O.
- *
- * This function is deprecated and does nothing.
- *
- * \param dev a device handle
- * \param buffers the number of buffers to keep in the pool
- * \returns 0
- */
-API_EXPORTED int b3dfg_set_num_buffers(b3dfg_dev *dev, int buffers)
-{
-	b3dfg_dbg("b3dfg_set_num_buffers is deprecated");
-	return 0;
-}
-
-/** \ingroup io
  * Release a buffer. This moves a buffer from the user state into the idle state
  * state.  This function should be called after processing on any buffer recieved
  * via b3dfg_get_buffer() and before said function is called again.
