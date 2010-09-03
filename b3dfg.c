@@ -149,6 +149,12 @@ struct b3dfg_dev {
 
 	unsigned int transmission_enabled:1;
 	unsigned int triplet_ready:1;
+
+	/*
+	 * Protects consumer (process that can lock buffers for use).
+	 */
+	spinlock_t consumer_lock;
+	pid_t consumer;
 };
 
 static u8 b3dfg_devices[B3DFG_MAX_DEVS];
@@ -305,6 +311,15 @@ static int release_buffer(struct b3dfg_dev *fgdev, int bufidx)
 	int r = 0;
 
 	dev_dbg(dev, "release_buffer() %d\n", bufidx);
+
+	spin_lock_irqsave(&fgdev->consumer_lock, flags);
+	if (fgdev->consumer != current->pid) {
+		spin_unlock_irqrestore(&fgdev->consumer_lock, flags);
+		dev_dbg(dev, "release_buffer:  pid %d does not have consumer lock\n", current->pid);
+		return -EBUSY;
+	}
+	spin_unlock_irqrestore(&fgdev->consumer_lock, flags);
+
 	spin_lock_irqsave(&fgdev->buffer_lock, flags);
 
 	if (bufidx < 0 || bufidx >= b3dfg_nbuf) {
@@ -341,6 +356,14 @@ static int get_buffer(struct b3dfg_dev *fgdev, void __user *arg)
 		dev_dbg(dev, "cannot wait, transmission disabled\n");
 		return -EINVAL;
 	}
+
+	spin_lock_irqsave(&fgdev->consumer_lock, flags);
+	if (fgdev->consumer != current->pid) {
+		spin_unlock_irqrestore(&fgdev->consumer_lock, flags);
+		dev_dbg(dev, "get_buffer:  pid %d does not have consumer lock\n", current->pid);
+		return -EBUSY;
+	}
+	spin_unlock_irqrestore(&fgdev->consumer_lock, flags);
 
 	spin_lock_irqsave(&fgdev->buffer_lock, flags);
 	if ( likely(find_newest_buffer(fgdev, &idx) == 0 )) {
@@ -456,6 +479,16 @@ static int enable_transmission(struct b3dfg_dev *fgdev)
 		return -EINVAL;
 	}
 
+	spin_lock_irqsave(&fgdev->consumer_lock, flags);
+	if (fgdev->consumer && fgdev->consumer != current->pid) {
+		spin_unlock_irqrestore(&fgdev->consumer_lock, flags);
+		dev_dbg(dev, "locked by consumer, pid %d", fgdev->consumer);
+		return -EBUSY;
+	}
+	fgdev->consumer = current->pid;
+	spin_unlock_irqrestore(&fgdev->consumer_lock, flags);
+
+
 	spin_lock_irqsave(&fgdev->buffer_lock, flags);
 
 	/* Handle racing enable_transmission calls. */
@@ -482,7 +515,7 @@ out:
 	return 0;
 }
 
-static void disable_transmission(struct b3dfg_dev *fgdev)
+static int disable_transmission(struct b3dfg_dev *fgdev)
 {
 	struct device *dev = &fgdev->pdev->dev;
 	unsigned long flags;
@@ -490,8 +523,22 @@ static void disable_transmission(struct b3dfg_dev *fgdev)
 
 	dev_dbg(dev, "disable transmission\n");
 
+	spin_lock_irqsave(&fgdev->consumer_lock, flags);
+	if (fgdev->consumer && fgdev->consumer != current->pid) {
+		spin_unlock_irqrestore(&fgdev->consumer_lock, flags);
+		dev_dbg(dev, "locked by consumer, pid %d", fgdev->consumer);
+		return -EBUSY;
+	}
+	fgdev->consumer = 0;
+	spin_unlock_irqrestore(&fgdev->consumer_lock, flags);
+
+
 	/* guarantee that no more interrupts will be serviced */
 	spin_lock_irqsave(&fgdev->buffer_lock, flags);
+	if (!fgdev->transmission_enabled) {
+		spin_unlock_irqrestore(&fgdev->buffer_lock, flags);
+		return 0;
+	}
 	fgdev->transmission_enabled = 0;
 
 	b3dfg_write32(fgdev, B3D_REG_HW_CTRL, 0);
@@ -506,16 +553,17 @@ static void disable_transmission(struct b3dfg_dev *fgdev)
 	spin_unlock_irqrestore(&fgdev->buffer_lock, flags);
 
 	wake_up_interruptible(&fgdev->buffer_waitqueue);
+	return 0;
 }
 
 static int set_transmission(struct b3dfg_dev *fgdev, int enabled)
 {
 	int res = 0;
-
-	if (enabled && !fgdev->transmission_enabled)
+	
+	if (enabled)
 		res = enable_transmission(fgdev);
-	else if (!enabled && fgdev->transmission_enabled)
-		disable_transmission(fgdev);
+	else if (!enabled)
+		res = disable_transmission(fgdev);
 
 	return res;
 }
@@ -738,8 +786,17 @@ static int b3dfg_open(struct inode *inode, struct file *filp)
 static int b3dfg_release(struct inode *inode, struct file *filp)
 {
 	struct b3dfg_dev *fgdev = filp->private_data;
+	unsigned long flags;
+
 	dev_dbg(&fgdev->pdev->dev, "release\n");
-	disable_transmission(fgdev);
+	spin_lock_irqsave(&fgdev->consumer_lock, flags);
+	if (fgdev->consumer == current->pid) {
+		spin_unlock_irqrestore(&fgdev->consumer_lock, flags);
+		dev_dbg(&fgdev->pdev->dev, "release:  forcing disable transmission.\n");
+		disable_transmission(fgdev);
+		return 0;
+	}
+	spin_unlock_irqrestore(&fgdev->consumer_lock, flags);
 	return 0;
 }
 
@@ -810,6 +867,23 @@ static int b3dfg_mmap(struct file *filp, struct vm_area_struct *vma)
 	return r;
 }
 
+static int b3dfg_flush(struct file *filp, fl_owner_t id)
+{
+	struct b3dfg_dev *fgdev = filp->private_data;
+	unsigned long flags;
+
+	spin_lock_irqsave(&fgdev->consumer_lock, flags);
+	if (fgdev->consumer == current->pid) {
+		spin_unlock_irqrestore(&fgdev->consumer_lock, flags);
+		dev_dbg(&fgdev->pdev->dev, "flush:  forcing disable transmission.\n");
+		disable_transmission(fgdev);
+		return 0;
+	}
+	spin_unlock_irqrestore(&fgdev->consumer_lock, flags);
+	return 0;
+}
+
+
 static struct file_operations b3dfg_fops = {
 	.owner = THIS_MODULE,
 	.open = b3dfg_open,
@@ -817,6 +891,7 @@ static struct file_operations b3dfg_fops = {
 	.unlocked_ioctl = b3dfg_ioctl,
 	.poll = b3dfg_poll,
 	.mmap = b3dfg_mmap,
+	.flush = b3dfg_flush,
 };
 
 static void free_all_frame_buffers(struct b3dfg_dev *fgdev)
@@ -860,10 +935,12 @@ static int b3dfg_init_dev(struct b3dfg_dev *fgdev)
 		INIT_LIST_HEAD(&buf->list);
 	}
 
+	fgdev->consumer = 0;
 	init_waitqueue_head(&fgdev->buffer_waitqueue);
 	spin_lock_init(&fgdev->buffer_lock);
 	spin_lock_init(&fgdev->cstate_lock);
 	spin_lock_init(&fgdev->triplets_dropped_lock);
+	spin_lock_init(&fgdev->consumer_lock);
 	return 0;
 
 err_no_mem:
