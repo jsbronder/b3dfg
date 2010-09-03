@@ -720,11 +720,10 @@ static irqreturn_t b3dfg_intr(int irq, void *dev_id)
 	dropped = (sts >> 8) & 0xff;
 	dev_dbg(dev, "intr: DMA_STS=%08x (drop=%d comp=%d next=%d)\n",
 		sts, dropped, !!(sts & 0x4), sts & 0x3);
-	if (unlikely(dropped > 0)) {
-		spin_lock(&fgdev->triplets_dropped_lock);
-		fgdev->triplets_dropped += dropped;
-		spin_unlock(&fgdev->triplets_dropped_lock);
-	}
+	if (unlikely(dropped > 0))
+		dev_err(dev,
+			"b3dfg reported %d buffers dropped since last intrrupt was handled",
+			dropped);
 
 	/* Handle a cable state change (i.e. the wand being unplugged). */
 	if (sts & 0x08) {
