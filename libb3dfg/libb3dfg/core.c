@@ -331,7 +331,6 @@ API_EXPORTED unsigned int b3dfg_get_frame_size(b3dfg_dev *dev)
  * Enable or disable transmission. It is legal to attempt to enable
  * transmission if it was already enabled, or disable transmission if it was
  * already disabled; this function does not indicate error in either case.
- * FIXME: kernel driver does not agree yet!
  *
  * \param dev a device handle
  * \param enabled 1 to enable transmission, 0 to disable
