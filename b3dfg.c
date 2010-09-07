@@ -117,7 +117,7 @@ struct b3dfg_dev {
 
 	/*
 	 * Protects buffer state, including triplet_ready, cur_dma_buf_idx,
-	 * cur_dma_frame_idx & cur_dma_frame_addr.
+	 * cur_dma_frame_idx, cur_dma_frame_addr, cur_user_buf_idx.
 	 */
 	spinlock_t buffer_lock;
 	struct b3dfg_buffer *buffers;
@@ -130,6 +130,9 @@ struct b3dfg_dev {
 
 	/* Current frame's address for DMA. */
 	dma_addr_t cur_dma_frame_addr;
+
+	/* Buffer currently locked by userspace (-1 if none). */
+	int cur_user_buf_idx;
 
 	/*
 	 * Protects cstate_tstamp.
@@ -304,13 +307,11 @@ static int is_event_ready(struct b3dfg_dev *fgdev, int *idx,
 	return result;
 }
 
-static int release_buffer(struct b3dfg_dev *fgdev, int bufidx)
+static int release_buffer(struct b3dfg_dev *fgdev)
 {
 	struct device *dev = &fgdev->pdev->dev;
 	unsigned long flags;
 	int r = 0;
-
-	dev_dbg(dev, "release_buffer() %d\n", bufidx);
 
 	spin_lock_irqsave(&fgdev->consumer_lock, flags);
 	if (fgdev->consumer != current->pid) {
@@ -322,19 +323,11 @@ static int release_buffer(struct b3dfg_dev *fgdev, int bufidx)
 
 	spin_lock_irqsave(&fgdev->buffer_lock, flags);
 
-	if (bufidx < 0 || bufidx >= b3dfg_nbuf) {
-		dev_dbg(dev, "Invalid buffer index, %d\n", bufidx);
-		r = -ENOENT;
+	if (unlikely(fgdev->cur_user_buf_idx < 0)){
 		goto out;
 	}
-
-	if (unlikely(fgdev->buffers[bufidx].state != B3DFG_BUFFER_USER)) {
-		dev_warn(dev, "buffer %d is already released\n", bufidx);
-		r = -EINVAL;
-		goto out;
-	}
-
-	fgdev->buffers[bufidx].state = B3DFG_BUFFER_IDLE;
+	fgdev->buffers[fgdev->cur_user_buf_idx].state = B3DFG_BUFFER_IDLE;
+	fgdev->cur_user_buf_idx = -1;
 
 out:
 	spin_unlock_irqrestore(&fgdev->buffer_lock, flags);
@@ -366,6 +359,13 @@ static int get_buffer(struct b3dfg_dev *fgdev, void __user *arg)
 	spin_unlock_irqrestore(&fgdev->consumer_lock, flags);
 
 	spin_lock_irqsave(&fgdev->buffer_lock, flags);
+	if (fgdev->cur_user_buf_idx >= 0){
+		dev_dbg(dev, "get_buffer:  pid %d already locked buffer %d\n",
+			current->pid, fgdev->cur_user_buf_idx);
+		r = -EPERM;
+		goto out_unlock;
+	}
+		
 	if ( likely(find_newest_buffer(fgdev, &idx) == 0 )) {
 		r = w.timeout;
 		goto out_triplets_dropped;
@@ -415,6 +415,7 @@ out_triplets_dropped:
 	spin_lock(&fgdev->triplets_dropped_lock);
 	w.triplets_dropped = fgdev->triplets_dropped;
 	fgdev->triplets_dropped = 0;
+	fgdev->cur_user_buf_idx = idx;
 	spin_unlock(&fgdev->triplets_dropped_lock);
 
 out_unlock:
@@ -504,6 +505,7 @@ static int enable_transmission(struct b3dfg_dev *fgdev)
 	fgdev->triplet_ready = 0;
 	fgdev->cur_dma_frame_idx = -1;
 	fgdev->cur_dma_buf_idx = -1;
+	fgdev->cur_user_buf_idx = -1;
 	fgdev->transmission_enabled = 1;
 
 	spin_unlock_irqrestore(&fgdev->buffer_lock, flags);
@@ -811,7 +813,7 @@ static long b3dfg_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 	case B3DFG_IOCTTRANS:
 		return set_transmission(fgdev, (int) arg);
 	case B3DFG_IOCTRELBUF:
-		return release_buffer(fgdev, (int) arg);
+		return release_buffer(fgdev);
 	case B3DFG_IOCTGETBUF:
 		return get_buffer(fgdev, (void __user *) arg);
 	default:
