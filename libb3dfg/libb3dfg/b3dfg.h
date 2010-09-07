@@ -14,6 +14,13 @@
 struct b3dfg_dev;
 typedef struct b3dfg_dev b3dfg_dev;
 
+struct b3dfg_buffer_state {
+	unsigned int dropped;
+	struct timeval stamp;
+	int buffer;
+};
+typedef struct b3dfg_buffer_state b3dfg_buffer_state;
+
 int b3dfg_init(void);
 void b3dfg_exit(void);
 
@@ -27,8 +34,8 @@ unsigned int b3dfg_get_frame_size(b3dfg_dev *dev);
 int b3dfg_set_transmission(b3dfg_dev *dev, int enabled);
 
 int b3dfg_release_buffer(b3dfg_dev *dev);
-int b3dfg_get_buffer(b3dfg_dev *dev, int *buffer, unsigned int timeout,
-	unsigned int *dropped, struct timeval *tv);
+int b3dfg_get_buffer(b3dfg_dev *dev, unsigned int timeout, 
+	b3dfg_buffer_state *state);
 
 unsigned char *b3dfg_map_buffers(b3dfg_dev *dev, int prefault);
 unsigned char *b3dfg_get_mapping(b3dfg_dev *dev);

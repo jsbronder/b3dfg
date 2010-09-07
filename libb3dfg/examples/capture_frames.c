@@ -47,6 +47,7 @@ int main(void)
 	int i, buf, fd;
 	int r = 1;
     int triggering = 0;
+    struct b3dfg_buffer_state state;
 
 	dev = b3dfg_open(0);
 	if (!dev) {
@@ -83,12 +84,12 @@ int main(void)
 
 	for (i = 0; i < NUM_BUFFERS; i++) {
         while (true) {
-		    r = b3dfg_get_buffer(dev, &buf, 1000, NULL, NULL);
+		    r = b3dfg_get_buffer(dev, 1000, &state);
 		    if (r < 0) {
 			    fprintf(stderr, "get_buffer failed\n");
 			    goto out;
-		    } else if (buf == i) {
-                printf("Got buffer %d\n", buf);
+		    } else if (state.buffer == i) {
+                printf("Got buffer %d\n", state.buffer);
 		        write_to_file(i);
                 b3dfg_release_buffer(dev);
                 break;

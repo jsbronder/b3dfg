@@ -379,16 +379,16 @@ API_EXPORTED int b3dfg_release_buffer(b3dfg_dev *dev)
  * \param dev a device handle
  * \param buffer the buffer returned from the driver, used with release_buffer()
  * \param timeout timeout in milliseconds, or 0 for unlimited timeout
- * \param dropped output location for number of dropped triplets (optional, can
- * be NULL). Only populated on return code >= 0.
- * \param tv timestamp from when the buffer was received (optional, can be NULL).
+ * \param state the state of the driver after the ioctl call, fills in the 
+ * buffer timestamp, buffer index and number of dropped triplets (optional, can
+ * be NULL).
  * \returns milliseconds remaining in timeout on success (buffer now contains
  * data and has been moved to user state), 0 if there was no timeout
  * \returns -ETIMEDOUT on timeout
  * \returns other negative code on other error
  */
-API_EXPORTED int b3dfg_get_buffer(b3dfg_dev *dev, int *buffer,
-	unsigned int timeout, unsigned int *dropped, struct timeval *tv)
+API_EXPORTED int b3dfg_get_buffer(b3dfg_dev *dev, unsigned int timeout,
+	b3dfg_buffer_state *state)
 {
 	struct b3dfg_wait w = { .timeout = timeout };
 	int r;
@@ -399,14 +399,12 @@ API_EXPORTED int b3dfg_get_buffer(b3dfg_dev *dev, int *buffer,
 			b3dfg_dbg("timed out");
 			return -ETIMEDOUT;
 		}
-		b3dfg_err("IOCTGETBUF(%d) failed r=%d errno=%d",
-			buffer, r, errno);
-	} else if (dropped)
-		*dropped = w.triplets_dropped;
-	if (tv)
-		memcpy(tv, &w.tv, sizeof(*tv));
-	if (buffer)
-		*buffer = w.buffer_idx;
+		b3dfg_err("IOCTGETBUF failed r=%d errno=%d", r, errno);
+	} else if (state) {
+		state->dropped = w.triplets_dropped;
+		memcpy(&state->stamp, &w.tv, sizeof(state->stamp));
+		state->buffer = w.buffer_idx;
+	}
 	return r;
 }
 

@@ -49,6 +49,7 @@ int main(void)
 	struct pollfd pfd = { .events = POLLIN };
 	unsigned int dropped;
     int triggering = 0;
+    b3dfg_buffer_state state;
 
 	dev = b3dfg_open(0);
 	if (!dev) {
@@ -93,7 +94,7 @@ int main(void)
             goto out;
 		}
 
-		r = b3dfg_get_buffer(dev, &buffer, 1000, &dropped, NULL);
+		r = b3dfg_get_buffer(dev, 1000, &state);
 		if (r < 0) {
 			fprintf(stderr, "poll failed error %d\n", r);
 			break;
@@ -102,8 +103,8 @@ int main(void)
 			fprintf(stderr, "buffer not ready after poll()?\n");
 			break;
 		}
-		if (dropped > 0) {
-			printf("%d frame(s) dropped\n", dropped);
+		if (state.dropped > 0) {
+			printf("%d frame(s) dropped\n", state.dropped);
 		}
 		write_to_file(buffer);
         b3dfg_release_buffer(dev);

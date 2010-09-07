@@ -29,6 +29,7 @@ int main(void)
 	int r = 1;
     int triggering = 0;
     int buffer_counts[NUM_BUFFERS] = {0, 0, 0};
+    b3dfg_buffer_state state;
 
 	dev = b3dfg_open(0);
 	if (!dev) {
@@ -66,12 +67,12 @@ int main(void)
     printf("Running until we acquire %d buffers\n", GET_N_BUFFERS);
 
 	for (i = 0; i < GET_N_BUFFERS; i++) {
-        r = b3dfg_get_buffer(dev, &buf, 1000, NULL, NULL);
+        r = b3dfg_get_buffer(dev, 1000, &state);
         if (r < 0) {
             fprintf(stderr, "get_buffer failed\n");
             goto out;
         }
-        buffer_counts[buf]++;
+        buffer_counts[state.buffer]++;
         usleep( rand() % 100000 );
         if ( !(i % 10) ){
             printf ("*");
