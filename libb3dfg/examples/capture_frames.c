@@ -90,10 +90,10 @@ int main(void)
 		    } else if (buf == i) {
                 printf("Got buffer %d\n", buf);
 		        write_to_file(i);
-                b3dfg_release_buffer(dev, buf);
+                b3dfg_release_buffer(dev);
                 break;
             }
-            b3dfg_release_buffer(dev, buf);
+            b3dfg_release_buffer(dev);
             usleep( rand() % 4000 );
         }
 	}

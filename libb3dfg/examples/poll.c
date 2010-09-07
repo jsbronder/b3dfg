@@ -106,7 +106,7 @@ int main(void)
 			printf("%d frame(s) dropped\n", dropped);
 		}
 		write_to_file(buffer);
-        b3dfg_release_buffer(dev, buffer);
+        b3dfg_release_buffer(dev);
 	}
 
 	r = 0;

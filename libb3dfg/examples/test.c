@@ -77,7 +77,7 @@ int main(void)
             printf ("*");
             fflush(stdout);
         }
-        b3dfg_release_buffer(dev, buf);
+        b3dfg_release_buffer(dev);
         buf = -1;
 	}
     printf("\n");
@@ -89,7 +89,7 @@ out:
 	if (dev) {
 		b3dfg_unmap_buffers(dev);
         if (buf != -1){
-            b3dfg_release_buffer(dev, buf);
+            b3dfg_release_buffer(dev);
         }
     }
 	b3dfg_close(dev);

@@ -356,25 +356,13 @@ API_EXPORTED int b3dfg_set_transmission(b3dfg_dev *dev, int enabled)
  * \returns 0 on buffer release, 1 if the buffer was already released and negative
  * on error
  */
-API_EXPORTED int b3dfg_release_buffer(b3dfg_dev *dev, int buffer)
+API_EXPORTED int b3dfg_release_buffer(b3dfg_dev *dev)
 {
 	int r;
 	
-	r = ioctl(dev->fd, B3DFG_IOCTRELBUF, buffer);
+	r = ioctl(dev->fd, B3DFG_IOCTRELBUF);
 	if (r < 0) {
-		if (errno == EINVAL){
-			/*
-			 * It's possible that the caller has already released this buffer
-			 * and is attempting to do so again.  In this case, the driver
-			 * will return EINVAL.  This is a mistake in the caller's code,
-			 * so we don't return an error here.
-			 */
-			// TOFIX:  We need real return codes
-			b3dfg_dbg("IOCTRELBUF:  buffer %d was already released", buffer);
-			r = 1;
-		} else {
-			b3dfg_err("IOCTRELBUF(%d) failed r=%d errno=%d", buffer, r, errno);
-		}
+		b3dfg_err("IOCTRELBUF failed r=%d errno=%d", r, errno);
 	}
 	return r;
 }
