@@ -380,8 +380,8 @@ API_EXPORTED int b3dfg_release_buffer(b3dfg_dev *dev)
  * \param buffer the buffer returned from the driver, used with release_buffer()
  * \param timeout timeout in milliseconds, or 0 for unlimited timeout
  * \param state the state of the driver after the ioctl call, fills in the 
- * buffer timestamp, buffer index and number of dropped triplets (optional, can
- * be NULL).
+ * buffer timestamp, buffer index, number of dropped triplets and address
+ * of the beginning of the buffer.
  * \returns milliseconds remaining in timeout on success (buffer now contains
  * data and has been moved to user state), 0 if there was no timeout
  * \returns -ETIMEDOUT on timeout
@@ -393,6 +393,9 @@ API_EXPORTED int b3dfg_get_buffer(b3dfg_dev *dev, unsigned int timeout,
 	struct b3dfg_wait w = { .timeout = timeout };
 	int r;
 
+	if (!state)
+		return -EINVAL;
+
 	r = ioctl(dev->fd, B3DFG_IOCTGETBUF, &w);
 	if (r < 0) {
 		if (timeout && errno == ETIMEDOUT) {
@@ -400,10 +403,11 @@ API_EXPORTED int b3dfg_get_buffer(b3dfg_dev *dev, unsigned int timeout,
 			return -ETIMEDOUT;
 		}
 		b3dfg_err("IOCTGETBUF failed r=%d errno=%d", r, errno);
-	} else if (state) {
+	} else {
 		state->dropped = w.triplets_dropped;
 		memcpy(&state->stamp, &w.tv, sizeof(state->stamp));
 		state->buffer = w.buffer_idx;
+		state->addr = dev->mapping + (state->buffer * dev->frame_size * 3);
 	}
 	return r;
 }

@@ -18,6 +18,7 @@ struct b3dfg_buffer_state {
 	unsigned int dropped;
 	struct timeval stamp;
 	int buffer;
+	char *addr;
 };
 typedef struct b3dfg_buffer_state b3dfg_buffer_state;
 
