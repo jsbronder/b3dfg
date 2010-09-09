@@ -19,35 +19,34 @@
 static b3dfg_dev *dev;
 static unsigned char *mapping;
 static unsigned int frame_size;
+static int frame_number = 0;
 
-static void write_frame(int buffer, int frame)
+static void write_frame(char *addr, int frame)
 {
 	char filename[50];
 	FILE *fd;
-	int num = (buffer * 3) + frame;
 
-	sprintf(filename, "cap%02d.pgm", num);
+    frame_number++;
+	sprintf(filename, "cap%02d.pgm", frame_number);
 	fd = fopen(filename, "w");
 	fprintf(fd, "P5 1024 768 255 ");
-	fwrite(mapping + (buffer * frame_size * 3) + (frame_size * frame), 1,
-		frame_size, fd);
+	fwrite(addr + (frame_size * frame), 1, frame_size, fd);
 	fclose(fd);
 }
 
-static void write_to_file(int buffer)
+static void write_to_file(char *addr)
 {
-	write_frame(buffer, 0);
-	write_frame(buffer, 1);
-	write_frame(buffer, 2);
+	write_frame(addr, 0);
+	write_frame(addr, 1);
+	write_frame(addr, 2);
 }
 
 int main(void)
 {
-	int i, buffer;
+	int i;
 	int r = 1;
     int fd = -1;
 	struct pollfd pfd = { .events = POLLIN };
-	unsigned int dropped;
     int triggering = 0;
     b3dfg_buffer_state state;
 
@@ -106,7 +105,7 @@ int main(void)
 		if (state.dropped > 0) {
 			printf("%d frame(s) dropped\n", state.dropped);
 		}
-		write_to_file(buffer);
+		write_to_file(state.addr);
         b3dfg_release_buffer(dev);
 	}
 

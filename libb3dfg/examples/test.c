@@ -19,16 +19,34 @@
 #define NUM_BUFFERS 3
 
 static b3dfg_dev *dev;
-static unsigned char *mapping;
 static unsigned int frame_size;
+
+static void write_buffer(char *buffer_start)
+{
+	char filename[50];
+	FILE *fd;
+    int i;
+   
+    for (i=0; i<3; i++) {
+	    sprintf(filename, "cap%02d.pgm", i);
+	    fd = fopen(filename, "w");
+	    fprintf(fd, "P5 1024 768 255 ");
+	    if ( fwrite(buffer_start + (frame_size * i), 1, frame_size, fd) <= 0 ){
+            fprintf(stderr, "fwrite: %s failed\n", filename);
+        }
+	    fclose(fd);
+    }
+
+}
 
 int main(void)
 {
-	int i, fd;
+	int i = 0, fd;
     int buf = -1;
 	int r = 1;
     int triggering = 0;
     int buffer_counts[NUM_BUFFERS] = {0, 0, 0};
+    unsigned char *mapping;
     b3dfg_buffer_state state;
 
 	dev = b3dfg_open(0);
@@ -73,6 +91,7 @@ int main(void)
             goto out;
         }
         buffer_counts[state.buffer]++;
+        write_buffer(state.addr);
         usleep( rand() % 100000 );
         if ( !(i % 10) ){
             printf ("*");
