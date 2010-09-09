@@ -17,7 +17,8 @@ design/design.*
 !design/design.tex
 libb3dfg/examples/capture_frames*
 libb3dfg/examples/poll
-libb3dfg/examples/poll2
 libb3dfg/examples/test
 libb3dfg/examples/test_intr
+libb3dfg/examples/cstate
+
 
