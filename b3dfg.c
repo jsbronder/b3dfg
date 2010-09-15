@@ -724,7 +724,7 @@ static irqreturn_t b3dfg_intr(int irq, void *dev_id)
 		sts, dropped, !!(sts & 0x4), sts & 0x3);
 	if (unlikely(dropped > 0))
 		dev_err(dev,
-			"b3dfg reported %d buffers dropped since last intrrupt was handled",
+			"b3dfg reported %d buffers dropped since last interrupt was handled",
 			dropped);
 
 	/* Handle a cable state change (i.e. the wand being unplugged). */
