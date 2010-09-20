@@ -16,6 +16,7 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/param.h>
 #include <unistd.h>
 #include <string.h>
 
@@ -207,6 +208,34 @@ void b3dfg_log(enum b3dfg_log_level level, const char *function,
 	fprintf(stderr, "\n");
 }
 
+static int read_sysfs_int(const char *path, int *val)
+{
+	FILE *fp = NULL;
+	char str[32];
+
+	fp = fopen(path, "r");
+	if (!fp) {
+		b3dfg_err("open(%s) failed errno %d", path, errno);
+		return -1;
+	}
+
+	if (!fgets(str, 32, fp)) {
+		b3dfg_err("fgets() failed errno %d", errno);
+		fclose(fp);
+		return -1;
+	}
+	fclose(fp);
+
+	errno = 0;
+	*val = (int)strtol(str, NULL, 10);
+	if (errno == ERANGE) {
+		b3dfg_err("strtol(%s) failed errno %d", str, errno);
+		return -1;
+	}
+	return 0;
+}
+
+
 /** \ingroup core
  * Obtain a device handle for a frame grabber.
  *
@@ -216,7 +245,7 @@ void b3dfg_log(enum b3dfg_log_level level, const char *function,
 API_EXPORTED b3dfg_dev *b3dfg_open(unsigned int idx)
 {
 	struct b3dfg_dev *dev;
-	char filename[12];
+	char filename[MAXPATHLEN];
 	int fd;
 	int r;
 	int frame_size;
@@ -226,21 +255,16 @@ API_EXPORTED b3dfg_dev *b3dfg_open(unsigned int idx)
 		return NULL;
 	}
 
-	r = snprintf(filename, sizeof(filename), "/dev/b3dfg%1d", idx);
-	if (r != sizeof(filename) - 1)
+	r = snprintf(filename, MAXPATHLEN, "/dev/b3dfg%1d", idx);
+	if (r < 0 || r >= MAXPATHLEN) {
+		b3dfg_err("snprintf(devpath) failed errno=%d\n", idx, errno);
 		return NULL;
+	}
 
 	b3dfg_dbg("%s", filename);
 	fd = open(filename, O_RDONLY);
 	if (fd < 0) {
 		b3dfg_err("open(%s) failed errno=%d", filename, errno);
-		return NULL;
-	}
-
-	r = ioctl(fd, B3DFG_IOCGFRMSZ, &frame_size);
-	if (r < 0) {
-		b3dfg_err("IOCGFRMSIZE failed %d errno=%d", r, errno);
-		close(fd);
 		return NULL;
 	}
 
@@ -250,8 +274,21 @@ API_EXPORTED b3dfg_dev *b3dfg_open(unsigned int idx)
 		return NULL;
 	}
 
+	r = snprintf(filename, MAXPATHLEN,
+		"/sys/class/b3dfg/b3dfg%1d/device/frame_size", idx);
+	if (r < 0 || r >= MAXPATHLEN) {
+		b3dfg_err("snprintf(syspath) failed errno=%d\n", errno);
+		return NULL;
+	}
+
+	r = read_sysfs_int(filename, &frame_size);
+	/* b3dfg_err() called in read_sysfs_int() */
+	if (r < 0)
+		return NULL;
+
 	b3dfg_dbg("opened fd=%d frame_size=%d", fd, frame_size);
 	dev->fd = fd;
+	dev->idx = idx;
 	dev->frame_size = frame_size;
 	dev->num_buffers = B3DFG_NUM_BUFFERS;
 	dev->mapping = NULL;
@@ -290,12 +327,19 @@ API_EXPORTED int b3dfg_get_wand_status(b3dfg_dev *dev)
 {
 	int r;
 	int status;
-
-	r = ioctl(dev->fd, B3DFG_IOCGWANDSTAT, &status);
-	if (r < 0) {
-		b3dfg_err("IOCGWANDSTAT failed %d errno=%d", r, errno);
-		return r;
+	char filename[MAXPATHLEN];	
+	
+	r = snprintf(filename, MAXPATHLEN,
+		"/sys/class/b3dfg/b3dfg%1d/device/cable_status", dev->idx);
+	if (r < 0 || r >= MAXPATHLEN) {
+		b3dfg_err("snprintf(syspath) failed errno=%d\n", errno);
+		return -1;
 	}
+
+	r = read_sysfs_int(filename, &status);
+	/* b3dfg_err() called in read_sysfs_int() */
+	if (r < 0)
+		return -1;
 
 	return status;
 }

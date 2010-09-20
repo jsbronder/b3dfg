@@ -32,6 +32,7 @@ struct b3dfg_wait {
 
 struct b3dfg_dev {
 	int fd;
+	unsigned int idx;
 	unsigned int frame_size;
 	unsigned int num_buffers;
 	unsigned char *mapping;
