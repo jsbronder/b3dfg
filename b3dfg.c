@@ -53,12 +53,9 @@ MODULE_LICENSE("GPL");
 #define B3DFG_REGS_LENGTH 0x10000
 
 #define B3DFG_IOC_MAGIC		0xb3 /* dfg :-) */
-#define B3DFG_IOCGFRMSZ		_IOR(B3DFG_IOC_MAGIC, 1, int)
-#define B3DFG_IOCTNUMBUFS	_IO(B3DFG_IOC_MAGIC, 2)
-#define B3DFG_IOCTTRANS		_IO(B3DFG_IOC_MAGIC, 3)
-#define B3DFG_IOCGWANDSTAT	_IOR(B3DFG_IOC_MAGIC, 4, int)
-#define B3DFG_IOCTRELBUF	_IO(B3DFG_IOC_MAGIC, 5)
-#define B3DFG_IOCTGETBUF	_IOWR(B3DFG_IOC_MAGIC, 6, struct b3dfg_wait)
+#define B3DFG_IOCTTRANS		_IO(B3DFG_IOC_MAGIC, 1)
+#define B3DFG_IOCTRELBUF	_IO(B3DFG_IOC_MAGIC, 2)
+#define B3DFG_IOCTGETBUF	_IOWR(B3DFG_IOC_MAGIC, 3, struct b3dfg_wait)
 
 enum {
 	/* number of 4kb pages per frame */
@@ -461,13 +458,6 @@ static struct vm_operations_struct b3dfg_vm_ops = {
 	.fault = b3dfg_vma_fault,
 };
 
-static int get_wand_status(struct b3dfg_dev *fgdev, int __user *arg)
-{
-	u32 wndstat = b3dfg_read32(fgdev, B3D_REG_WAND_STS);
-	dev_dbg(&fgdev->pdev->dev, "wand status %x\n", wndstat);
-	return __put_user(wndstat & 0x1, arg);
-}
-
 static int enable_transmission(struct b3dfg_dev *fgdev)
 {
 	unsigned long flags;
@@ -807,10 +797,6 @@ static long b3dfg_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 	struct b3dfg_dev *fgdev = filp->private_data;
 
 	switch (cmd) {
-	case B3DFG_IOCGFRMSZ:
-		return __put_user(fgdev->frame_size, (int __user *) arg);
-	case B3DFG_IOCGWANDSTAT:
-		return get_wand_status(fgdev, (int __user *) arg);
 	case B3DFG_IOCTTRANS:
 		return set_transmission(fgdev, (int) arg);
 	case B3DFG_IOCTRELBUF:
