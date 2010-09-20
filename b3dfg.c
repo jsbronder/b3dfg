@@ -37,6 +37,7 @@
 #include <linux/mm.h>
 #include <linux/uaccess.h>
 #include <linux/sched.h>
+#include <linux/sysfs.h>
 
 static unsigned int b3dfg_nbuf = 3;
 
@@ -895,6 +896,36 @@ static struct file_operations b3dfg_fops = {
 	.flush = b3dfg_flush,
 };
 
+
+static ssize_t show_frame_size(struct device *dev,
+	struct device_attribute *attr, char *buf)
+{
+	struct pci_dev *pdev = container_of(dev, struct pci_dev, dev);
+	struct b3dfg_dev *fgdev = pci_get_drvdata(pdev);
+	return sprintf(buf, "%u\n", fgdev->frame_size);
+}
+DEVICE_ATTR(frame_size, S_IRUGO, show_frame_size, NULL);
+
+static ssize_t show_cable_status(struct device *dev,
+	struct device_attribute *attr, char *buf)
+{
+	struct pci_dev *pdev = container_of(dev, struct pci_dev, dev);
+	struct b3dfg_dev *fgdev = pci_get_drvdata(pdev);
+	return sprintf(buf, "%u\n", b3dfg_read32(fgdev, B3D_REG_WAND_STS));
+}
+DEVICE_ATTR(cable_status, S_IRUGO, show_cable_status, NULL);
+
+static struct attribute *b3dfg_attributes[] = {
+	&dev_attr_frame_size.attr,
+	&dev_attr_cable_status.attr,
+	NULL,
+};
+
+static struct attribute_group b3dfg_attribute_group = {
+	.attrs = b3dfg_attributes,
+};
+
+
 static void free_all_frame_buffers(struct b3dfg_dev *fgdev)
 {
 	int i, j;
@@ -1005,10 +1036,16 @@ static int __devinit b3dfg_probe(struct pci_dev *pdev,
 		goto err_del_cdev;
 	}
 
+	r = sysfs_create_group(&pdev->dev.kobj, &b3dfg_attribute_group);
+	if (r) {
+		dev_err(&pdev->dev, "cannot create sysfs group\n");
+		goto err_dev_unreg;
+	}
+
 	r = pci_enable_device(pdev);
 	if (r) {
 		dev_err(&pdev->dev, "cannot enable PCI device\n");
-		goto err_dev_unreg;
+		goto err_sysfs_remove;
 	}
 
 	res_len = pci_resource_len(pdev, B3DFG_BAR_REGS);
@@ -1072,6 +1109,8 @@ err_disable:
 	pci_disable_device(pdev);
 err_dev_unreg:
 	device_destroy(b3dfg_class, devno);
+err_sysfs_remove:
+	sysfs_remove_group(&pdev->dev.kobj, &b3dfg_attribute_group);
 err_del_cdev:
 	cdev_del(&fgdev->chardev);
 err_release_minor:
@@ -1092,6 +1131,7 @@ static void __devexit b3dfg_remove(struct pci_dev *pdev)
 	iounmap(fgdev->regs);
 	pci_release_regions(pdev);
 	pci_disable_device(pdev);
+	sysfs_remove_group(&pdev->dev.kobj, &b3dfg_attribute_group);
 	device_destroy(b3dfg_class, MKDEV(MAJOR(b3dfg_devt), minor));
 	cdev_del(&fgdev->chardev);
 	free_all_frame_buffers(fgdev);
