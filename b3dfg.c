@@ -901,9 +901,20 @@ static ssize_t show_cable_status(struct device *dev,
 }
 DEVICE_ATTR(cable_status, S_IRUGO, show_cable_status, NULL);
 
+static ssize_t show_transmission(struct device *dev,
+	struct device_attribute *attr, char *buf)
+{
+	struct pci_dev *pdev = container_of(dev, struct pci_dev, dev);
+	struct b3dfg_dev *fgdev = pci_get_drvdata(pdev);
+	return sprintf(buf, "%u\n",
+		b3dfg_read32(fgdev, B3D_REG_HW_CTRL) & 0x3 ? 1 : 0);
+}
+DEVICE_ATTR(transmission, S_IRUGO, show_transmission, NULL);
+
 static struct attribute *b3dfg_attributes[] = {
 	&dev_attr_frame_size.attr,
 	&dev_attr_cable_status.attr,
+	&dev_attr_transmission.attr,
 	NULL,
 };
 
