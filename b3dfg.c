@@ -114,7 +114,8 @@ struct b3dfg_dev {
 
 	/*
 	 * Protects buffer state, including triplet_ready, cur_dma_buf_idx,
-	 * cur_dma_frame_idx, cur_dma_frame_addr, cur_user_buf_idx, consumer.
+	 * cur_dma_frame_idx, cur_dma_frame_addr, cur_user_buf_idx, consumer,
+	 * triplets_cnt.
 	 */
 	spinlock_t buffer_lock;
 	struct b3dfg_buffer *buffers;
@@ -295,7 +296,7 @@ static int is_event_ready(struct b3dfg_dev *fgdev, int *idx,
 	spin_lock_irqsave(&fgdev->buffer_lock, flags);
 	spin_lock(&fgdev->cstate_lock);
 	result = (!fgdev->transmission_enabled ||
-		  find_newest_buffer(fgdev, idx) == 0 ||
+		  (find_newest_buffer(fgdev, idx) == 0 && fgdev->triplets_cnt > 1) ||
 		  when != fgdev->cstate_tstamp);
 	spin_unlock(&fgdev->cstate_lock);
 	spin_unlock_irqrestore(&fgdev->buffer_lock, flags);
@@ -361,8 +362,28 @@ static int get_buffer(struct b3dfg_dev *fgdev, void __user *arg)
 		r = -EPERM;
 		goto out_unlock;
 	}
-		
-	if ( likely(find_newest_buffer(fgdev, &idx) == 0 )) {
+
+	/*
+	 * Frame transmission is handled by two separate pieces of hardware, the
+	 * framegrabber board (which this driver controls) and the wand connected
+	 * to the board.  The wand is controlled externally via an RS232 link.
+	 * In order for frame transmission to begin, the wand needs to be told to
+	 * start 'triggering' and the framegrabber needs to have transmission
+	 * enabled.  Typically this works correctly.
+	 *
+	 * However, if triggering is enabled before transmission, the framegrabber
+	 * will partially fill the first buffer based on when transmission is
+	 * enabled.  The wand will then send the board a 'frame-complete' message
+	 * which the board happily accepts and then sends an interrupt without
+	 * verifying that it did indeed get an entire frame (hint, it did not).
+	 * This leads to a frame that is partially current and partially left over
+	 * from the last time triggering and transmission were enabled.
+	 *
+	 * To workaround this issue, we make sure that we have already received
+	 * a second buffer from the framegrabber, therefore unconditionally ignoring
+	 * the first, potentially corrupt, buffer.
+	 */
+	if (likely(find_newest_buffer(fgdev, &idx) == 0 && fgdev->triplets_cnt > 1)) {
 		r = w.timeout;
 		goto out_triplets_dropped;
 	}
