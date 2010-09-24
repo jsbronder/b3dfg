@@ -147,6 +147,7 @@ struct b3dfg_dev {
 	 */
 	spinlock_t triplets_dropped_lock;
 	unsigned int triplets_dropped;
+	unsigned int triplets_cnt;
 
 	wait_queue_head_t buffer_waitqueue;
 
@@ -579,6 +580,7 @@ static void transfer_complete(struct b3dfg_dev *fgdev)
 		fgdev->buffers[fgdev->cur_dma_buf_idx].jiffies = jiffies;
 		wake_up_interruptible(&fgdev->buffer_waitqueue);
 		fgdev->cur_dma_buf_idx = -1;
+		fgdev->triplets_cnt++;
 	}
 }
 
@@ -736,6 +738,7 @@ static int b3dfg_open(struct inode *inode, struct file *filp)
 	fgdev->cur_dma_buf_idx = -1;
 	fgdev->cur_user_buf_idx = -1;
 	fgdev->transmission_enabled = 1;
+	fgdev->triplets_cnt = 0;
 
 	/* Enable DMA and cable status interrupts. */
 	b3dfg_write32(fgdev, B3D_REG_HW_CTRL, 0x03);
@@ -852,10 +855,21 @@ static ssize_t show_transmission(struct device *dev,
 }
 DEVICE_ATTR(transmission, S_IRUGO, show_transmission, NULL);
 
+static ssize_t show_triplets(struct device *dev,
+	struct device_attribute *attr, char *buf)
+{
+	struct pci_dev *pdev = container_of(dev, struct pci_dev, dev);
+	struct b3dfg_dev *fgdev = pci_get_drvdata(pdev);
+	return sprintf(buf, "%u\n", fgdev->triplets_cnt);
+}
+DEVICE_ATTR(triplets, S_IRUGO, show_triplets, NULL);
+
+
 static struct attribute *b3dfg_attributes[] = {
 	&dev_attr_frame_size.attr,
 	&dev_attr_cable_status.attr,
 	&dev_attr_transmission.attr,
+	&dev_attr_triplets.attr,
 	NULL,
 };
 
