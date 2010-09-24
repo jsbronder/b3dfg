@@ -46,23 +46,11 @@ int main(void)
 	int r = 1;
     int triggering = 0;
     int buffer_counts[NUM_BUFFERS] = {0, 0, 0};
-    unsigned char *mapping;
     b3dfg_buffer_state state;
 
-	dev = b3dfg_open(0);
+	dev = b3dfg_init(0);
 	if (!dev) {
-		fprintf(stderr, "open failed\n");
-		goto out;
-	}
-
-	printf("wand is %s\n",
-		b3dfg_get_wand_status(dev) ? "connected" : "disconnected");
-
-	frame_size = b3dfg_get_frame_size(dev);
-
-	mapping = b3dfg_map_buffers(dev, 0);
-	if (!mapping) {
-		fprintf(stderr, "mapping failed\n");
+		fprintf(stderr, "init failed\n");
 		goto out;
 	}
 
@@ -76,9 +64,14 @@ int main(void)
         goto out;
     }
 
-	r = b3dfg_set_transmission(dev, 1);
+	printf("wand is %s\n",
+		b3dfg_get_wand_status(dev) ? "connected" : "disconnected");
+
+	frame_size = b3dfg_get_frame_size(dev);
+
+	r = b3dfg_open(dev, 0);
 	if (r) {
-		fprintf(stderr, "set_transmission failed\n");
+		fprintf(stderr, "open failed\n");
 		goto out;
 	}
 
@@ -107,12 +100,11 @@ out:
     if (triggering)
         send_cmd(fd, STOP_TRIGGERS);
 	if (dev) {
-		b3dfg_unmap_buffers(dev);
-        if (buf != -1){
+        if (buf != -1)
             b3dfg_release_buffer(dev);
-        }
+		b3dfg_close(dev);
+        b3dfg_exit(dev);
     }
-	b3dfg_close(dev);
 
     if (i != GET_N_BUFFERS) {
         fprintf(stderr, "Only acquired %d of %d requested buffers\n", i, GET_N_BUFFERS);

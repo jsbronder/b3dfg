@@ -17,7 +17,6 @@
 #define NUM_BUFFERS 4
 
 static b3dfg_dev *dev;
-static unsigned char *mapping;
 static unsigned int frame_size;
 static int frame_number = 0;
 
@@ -25,12 +24,15 @@ static void write_frame(char *addr, int frame)
 {
 	char filename[50];
 	FILE *fd;
+    int r;
 
     frame_number++;
 	sprintf(filename, "cap%02d.pgm", frame_number);
 	fd = fopen(filename, "w");
 	fprintf(fd, "P5 1024 768 255 ");
-	fwrite(addr + (frame_size * frame), 1, frame_size, fd);
+	r = fwrite(addr + (frame_size * frame), 1, frame_size, fd);
+    if (r < frame_size)
+        fprintf(stderr, "Failed to write frame %d.\n", frame);
 	fclose(fd);
 }
 
@@ -50,19 +52,13 @@ int main(void)
     int triggering = 0;
     b3dfg_buffer_state state;
 
-	dev = b3dfg_open(0);
+	dev = b3dfg_init(0);
 	if (!dev) {
-		fprintf(stderr, "open failed\n");
+		fprintf(stderr, "init failed\n");
 		goto out;
 	}
 
 	frame_size = b3dfg_get_frame_size(dev);
-
-	mapping = b3dfg_map_buffers(dev, 0);
-	if (!mapping) {
-		fprintf(stderr, "mapping failed\n");
-		goto out;
-	}
 
     if ( (fd = open_serial("/dev/ttyUSB0")) <= 0 ) {
         r = -1;
@@ -74,9 +70,9 @@ int main(void)
         goto out;
     }
 
-	r = b3dfg_set_transmission(dev, 1);
+	r = b3dfg_open(dev, 1);
 	if (r) {
-		fprintf(stderr, "set_transmission failed\n");
+		fprintf(stderr, "open failed\n");
 		goto out;
 	}
 
@@ -113,9 +109,9 @@ int main(void)
 out:
     if (triggering)
         send_cmd(fd, STOP_TRIGGERS);
-    if (dev)	
-        b3dfg_unmap_buffers(dev);
-    b3dfg_set_transmission(dev, 0);
-	b3dfg_close(dev);
+    if (dev) {
+        b3dfg_close(dev);
+        b3dfg_exit(dev);
+    }
 	return r;
 }

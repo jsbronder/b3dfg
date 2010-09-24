@@ -18,7 +18,6 @@
 #define NUM_BUFFERS 3
 
 static b3dfg_dev *dev;
-static unsigned char *mapping;
 static unsigned int frame_size;
 static int frame_number = 0;
 
@@ -26,13 +25,16 @@ static void write_frame(char *buffer_start, int frame)
 {
 	char filename[50];
 	FILE *fd;
+    int r;
     
     frame_number++;
 	sprintf(filename, "cap%02d.pgm", frame_number);
 	fd = fopen(filename, "w");
 	fprintf(fd, "P5 1024 768 255 ");
-	fwrite(buffer_start + (frame_size * frame), 1,
+	r = fwrite(buffer_start + (frame_size * frame), 1,
 		frame_size, fd);
+    if (r < frame_size)
+        fprintf(stderr, "Failed to write frame %d.\n", frame);
 	fclose(fd);
 }
 
@@ -45,14 +47,14 @@ static void write_to_file(char *addr)
 
 int main(void)
 {
-	int i, buf, fd;
+	int i, fd;
 	int r = 1;
     int triggering = 0;
     struct b3dfg_buffer_state state;
 
-	dev = b3dfg_open(0);
+	dev = b3dfg_init(0);
 	if (!dev) {
-		fprintf(stderr, "open failed\n");
+		fprintf(stderr, "init failed\n");
 		goto out;
 	}
 
@@ -60,12 +62,6 @@ int main(void)
 		b3dfg_get_wand_status(dev) ? "connected" : "disconnected");
 
 	frame_size = b3dfg_get_frame_size(dev);
-
-	mapping = b3dfg_map_buffers(dev, 0);
-	if (!mapping) {
-		fprintf(stderr, "mapping failed\n");
-		goto out;
-	}
 
     if ( (fd = open_serial("/dev/ttyUSB0")) <= 0 ) {
         r = -1;
@@ -77,9 +73,9 @@ int main(void)
         goto out;
     }
 
-	r = b3dfg_set_transmission(dev, 1);
+	r = b3dfg_open(dev, 0);
 	if (r) {
-		fprintf(stderr, "set_transmission failed\n");
+		fprintf(stderr, "open failed\n");
 		goto out;
 	}
 
@@ -89,9 +85,10 @@ int main(void)
 		    if (r < 0) {
 			    fprintf(stderr, "get_buffer failed\n");
 			    goto out;
-		    } else if (state.buffer == i) {
+		    }
+		    write_to_file(state.addr);
+            if (state.buffer == i) {
                 printf("Got buffer %d\n", state.buffer);
-		        write_to_file(state.addr);
                 b3dfg_release_buffer(dev);
                 break;
             }
@@ -104,8 +101,9 @@ int main(void)
 out:
     if (triggering)
         send_cmd(fd, STOP_TRIGGERS);
-	if (dev)
-		b3dfg_unmap_buffers(dev);
-	b3dfg_close(dev);
+	if (dev) {
+		b3dfg_close(dev);
+        b3dfg_exit(dev);
+    }
 	return r;
 }

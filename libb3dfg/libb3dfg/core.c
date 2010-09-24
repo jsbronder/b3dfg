@@ -43,9 +43,9 @@
  *
  * \section devhandling Device handling
  *
- * After initializing the library, the first thing you will want to do is
- * obtain a device handle (a b3dfg_dev pointer) by calling b3dfg_open().
- * All subsequent operations are performed based on this handle.
+ * As part of initializing the library, b3dfg_init will return a device
+ * handle (a b3dfg_dev pointer).  All subsequent operations are performed based
+ * on this handle.
  *
  * \section buftheory Buffer theory
  *
@@ -55,8 +55,9 @@
  * referred to as a buffer or triplet.
  *
  * You can gain access to the frame data within buffers by <em>mapping</em>
- * the buffers into your process using b3dfg_map_buffers(). This function
- * returns a pointer to an area of memory with the following structure:
+ * the buffers into your process using b3dfg_open() which calls
+ * b3dfg_map_buffers(). The latter sets up an area of memory with the
+ * following structure:
  *
  * <table>
  * <tr>
@@ -81,33 +82,25 @@
  *
  * \section bufaccess Buffer addressing
  *
- * Once you have created the mapping and have a pointer to the start of it,
- * you can compute the address of any frame with simple pointer arithmetic.
+ * Once you have created the mapping you may call b3dfg_get_buffer() which will
+ * return a pointer to the beginning of the buffer.  From here you can compute
+ * the address of any frame with simple pointer arithmetic.
  * Assigning frame numbers:
  * <ul><li>0 = red</li><li>1 = green</li><li>2 = blue</li></ul>
  *
  * The equation is:
  *
  * <code>
- *     frame_start_addr = mapping + (frame_size * ((buffer_idx * 3) + frame_num))
- * </code>
- *
- * It may be more intuitive to think of it as follows:
- *
- * <code>
- *     frame_start_addr = mapping + (buffer_idx * frame_size * 3) + (frame_num * frame_size)
+ *     frame_start_addr = mapping + (frame_size * frame_num)
  * </code>
  *
  * For example, buffer 2 green frame:
  *
  * <code>
- * frame_start_addr = mapping + (frame_size * ((2 * 3) + 1)) = mapping + (frame_size * 7)
+ * frame_start_addr = mapping + (frame_size * 1)
  * </code>
  *
- * The frame_size can be determined by calling b3dfg_get_frame_size(). You
- * may wish to hardcode it to 1024x768 for optimization purposes, but do
- * remember that the frame size may change in future: there are plans to
- * include the first level pyramid data after the full-res frame.
+ * The frame_size can be determined by calling b3dfg_get_frame_size().
  *
  * \section transfer Data transfer
  *
@@ -117,11 +110,12 @@
  * released with b3dfg_release_buffer().  Due to triple buffering in the driver
  * b3dfg_get_buffer() will almost always return immediately.  Before requesting
  * another buffer, b3dfg_release_buffer() should be called in order to insure
- * the driver always has two free buffers to use.
+ * the driver always has two free buffers to use.  This is enforced by the driver
+ * and attempting to hold two buffers at the same time will yield EPERM.
  *
  * \section bufstate Buffer states
  *
- * A buffer is in 1 of 3 states at any moment in time:
+ * A buffer is in 1 of 4 states at any moment in time:
  *  - <b>Idle</b> - the buffer is not in use by userland or the driver.
  *  - <b>Pending</b> - the buffer is currently being used to serve
  *    DMA requests from the board.
@@ -129,8 +123,8 @@
  *    sent to userspace.
  *  - <b>User</b> - the buffer is currently being used by this library.
  *
- * At the point when transmission is enabled, all buffers are reset to the
- * idle state.
+ * At the point when the device is opened with b3dfg_open_buffer, all buffers are
+ * reset to the idle state.
  *
  * \section pollbuf Buffer polling
  *
@@ -163,24 +157,13 @@
  * that the kernel will drop a previously filled buffer in favor of the newest
  * coming from the board.  In this case, the <tt>dropped</tt> parameter of
  * b3dfg_get_buffer() will reflect the number of buffers dropped since 
- * transmission was enabled.  If the driver itself is unable to keep up with
- * the board (this should not occur), the board will also report the number of
- * buffers it has dropped.  This count is also appended to <tt>dropped</tt>.
- *
- * The dropped parameter is optional, you can pass NULL if you don't care.
- * However, if you do want to track dropped frames, you must pass an output
- * location <em>every time</em>. You are only informed about each dropped
- * frame triplet once, and if the library does receive information that
- * frames have been dropped but cannot pass it on, then that information will
- * be lost (it does not accumulate).
+ * the device was last opened.
  *
  * \section tv Timestamps
  *
  * When the driver completes the DMA transfer of a buffer, it also keeps a
- * record of when this occured.  You can access this timestamp by passing a
- * non-NULL struct timeval as the <tt>tv</tt> parameter of b3dfg_get_buffer().
- * Timestamps are tracked using the jiffies counter within the kernel and are
- * precise to milliseconds.
+ * record of when this occured.  Timestamps are tracked using the jiffies 
+ * counter within the kernel and are precise to milliseconds.
  *
  */
 
@@ -235,69 +218,96 @@ static int read_sysfs_int(const char *path, int *val)
 	return 0;
 }
 
+/*
+ * Unmap the mapping previously created with b3dfg_open(). It is legal
+ * to call this function even when there is no active mapping, in which case
+ * this function simply returns.
+ *
+ * Do not attempt to access any previous mapping after calling this function.
+ *
+ * \param dev a device handle
+ */
+static void b3dfg_unmap_buffers(b3dfg_dev *dev)
+{
+	int r;
+	if (!dev->mapping)
+		return;
+
+	b3dfg_dbg("");
+	r = munmap(dev->mapping,
+		dev->frame_size * FRAMES_PER_BUFFER * dev->num_buffers);
+	if (r != 0)
+		b3dfg_err("munmap failed r=%d errno=%d", r, errno);
+	dev->mapping = NULL;
+}
 
 /** \ingroup core
- * Obtain a device handle for a frame grabber.
+ * Request access to the frame buffers.  If successful, transmission is enabled
+ * on the board and the driver will start handling buffers as they are passed from
+ * the hardware.  Only one process at a time is allowed to own frame buffers in
+ * this manner.  If access is granted, frame buffers are mapped into the process
+ * address space and can be accessed after calling b3dfg_get_buffer().
  *
- * \param idx numerical index of the frame grabber you wish to open, usually 0
- * \returns a device handle, or NULL on error
+ * \param dev a device handle
+ * \param prefault whether to prefault the buffers or not. If prefault=0, you will
+ * incur a small performance penalty the first time you access each 4kb page within
+ * the mapping. If non-zero, this parameter causes the system to access each page
+ *
+ * \returns zero on success, non-zero on error.
  */
-API_EXPORTED b3dfg_dev *b3dfg_open(unsigned int idx)
+API_EXPORTED int b3dfg_open(b3dfg_dev *dev, int prefault)
 {
-	struct b3dfg_dev *dev;
 	char filename[MAXPATHLEN];
+	int flags = MAP_SHARED;
+	unsigned char *mapping;
 	int fd;
 	int r;
-	int frame_size;
 
-	if (idx > 9) {
-		b3dfg_err("invalid index %d", idx);
-		return NULL;
-	}
+	if (dev->fd > 0)
+		return 0;
 
-	r = snprintf(filename, MAXPATHLEN, "/dev/b3dfg%1d", idx);
+	r = snprintf(filename, MAXPATHLEN, "/dev/b3dfg%1d", dev->idx);
 	if (r < 0 || r >= MAXPATHLEN) {
-		b3dfg_err("snprintf(devpath) failed errno=%d\n", idx, errno);
-		return NULL;
+		r = errno == 0 ? ENOMEM : errno;
+		b3dfg_err("snprintf() failed errno=%d\n", dev->idx, r);
+		return r;
 	}
 
 	b3dfg_dbg("%s", filename);
 	fd = open(filename, O_RDONLY);
 	if (fd < 0) {
-		b3dfg_err("open(%s) failed errno=%d", filename, errno);
-		return NULL;
+		r = errno;
+		b3dfg_err("open(%s) failed errno=%d", filename, r);
+		return r;
 	}
 
-	dev = malloc(sizeof(*dev));
-	if (!dev) {
-		close(fd);
-		return NULL;
+	if (dev->mapping)
+		b3dfg_unmap_buffers(dev);
+
+	if (prefault)
+		flags |= MAP_POPULATE;
+	
+	mapping = mmap(NULL,
+		dev->frame_size * FRAMES_PER_BUFFER * dev->num_buffers, PROT_READ,
+		flags, fd, 0);
+	if (mapping == MAP_FAILED) {
+		r = errno;
+		b3dfg_err("mmap failed errno=%d", r);
+		if(close(fd) < 0)
+			b3dfg_err("cleanup close failed errno=%d", errno);
+		return r;
 	}
 
-	r = snprintf(filename, MAXPATHLEN,
-		"/sys/class/b3dfg/b3dfg%1d/device/frame_size", idx);
-	if (r < 0 || r >= MAXPATHLEN) {
-		b3dfg_err("snprintf(syspath) failed errno=%d\n", errno);
-		return NULL;
-	}
-
-	r = read_sysfs_int(filename, &frame_size);
-	/* b3dfg_err() called in read_sysfs_int() */
-	if (r < 0)
-		return NULL;
-
-	b3dfg_dbg("opened fd=%d frame_size=%d", fd, frame_size);
 	dev->fd = fd;
-	dev->idx = idx;
-	dev->frame_size = frame_size;
-	dev->num_buffers = B3DFG_NUM_BUFFERS;
-	dev->mapping = NULL;
-	return dev;
+	dev->mapping = mapping;
+	
+	return 0;
 }
 
 /** \ingroup core
- * Close a device handle. Call this when you have finished using a device.
- * If they were mapped, buffers are unmapped during this operation.
+ * Close a device handle. Call this when no longer want to receive buffer from the
+ * hardware.  Once closed, b3dfg_open() can be called again if more buffers are
+ * needed.
  *
  * If a NULL device handle is provided, this function simply returns without
  * doing anything.
@@ -311,8 +321,11 @@ API_EXPORTED void b3dfg_close(b3dfg_dev *dev)
 	b3dfg_dbg("fd=%d", dev->fd);
 
 	b3dfg_unmap_buffers(dev);
-	if (close(dev->fd) < 0)
-		b3dfg_err("close failed errno=%d", errno);
+	if (dev->fd > 0) {
+		if (close(dev->fd) < 0)
+			b3dfg_err("close failed errno=%d", errno);
+		dev->fd = -1;
+	}
 }
 
 /** \ingroup core
@@ -372,33 +385,13 @@ API_EXPORTED unsigned int b3dfg_get_frame_size(b3dfg_dev *dev)
 }
 
 /** \ingroup io
- * Enable or disable transmission. It is legal to attempt to enable
- * transmission if it was already enabled, or disable transmission if it was
- * already disabled; this function does not indicate error in either case.
- *
- * \param dev a device handle
- * \param enabled 1 to enable transmission, 0 to disable
- * \returns 0 on success, non-zero on error
- */
-API_EXPORTED int b3dfg_set_transmission(b3dfg_dev *dev, int enabled)
-{
-	int r;
-	b3dfg_dbg("%s", enabled ? "enabled" : "disabled");
-	r = ioctl(dev->fd, B3DFG_IOCTTRANS, enabled);
-	if (r < 0)
-		b3dfg_err("IOCTTRANS(%d) failed r=%d errno=%d", enabled, r, errno);
-	return r;
-}
-
-/** \ingroup io
  * Release a buffer. This moves a buffer from the user state into the idle state
  * state.  This function should be called after processing on any buffer recieved
  * via b3dfg_get_buffer() and before said function is called again.
  *
  * \param dev a device handle
  * \param buffer the buffer to release. 
- * \returns 0 on buffer release, 1 if the buffer was already released and negative
- * on error
+ * \returns 0 on buffer release, negative on error.
  */
 API_EXPORTED int b3dfg_release_buffer(b3dfg_dev *dev)
 {
@@ -421,7 +414,6 @@ API_EXPORTED int b3dfg_release_buffer(b3dfg_dev *dev)
  * automatically moves the buffer from the populated state to the user state.
  *
  * \param dev a device handle
- * \param buffer the buffer returned from the driver, used with release_buffer()
  * \param timeout timeout in milliseconds, or 0 for unlimited timeout
  * \param state the state of the driver after the ioctl call, fills in the 
  * buffer timestamp, buffer index, number of dropped triplets and address
@@ -456,97 +448,49 @@ API_EXPORTED int b3dfg_get_buffer(b3dfg_dev *dev, unsigned int timeout,
 	return r;
 }
 
-/** \ingroup io
- * Map frame buffers into process address space. This function returns the
- * base address of a mapping where you can find the image data. Buffers are
- * located contiguously throughout this mapping, starting from buffer 0.
- * Inside each buffer, each frame is located contiguously, in red-green-blue
- * order. You can use simple arithmetic based on the size of a frame in order
- * to locate any frame within the mapping. The mapping is of size precisely
- * big enough to accomodate all of the allocated buffers and their frames.
- *
- * You cannot map the buffers twice, but you can use b3dfg_get_mapping() to
- * retrieve the address of an already-created mapping.
- *
- * \param dev a device handle \param prefault whether to prefault the buffers
- * or not. If prefault=0, you will incur a small performance penalty the first
- * time you access each 4kb page within the mapping. If non-zero, this
- * parameter causes the system to access each page immediately so that no
- * performance penalty occurs later.  \returns the address of the new mapping
- * \returns NULL on error
- */
-API_EXPORTED unsigned char *b3dfg_map_buffers(b3dfg_dev *dev, int prefault)
-{
-	unsigned char *mapping;
-	int flags = MAP_SHARED;
-
-	if (dev->mapping) {
-		b3dfg_err("buffers already mapped");
-		return NULL;
-	}
-
-	if (prefault)
-		flags |= MAP_POPULATE;
-	
-	b3dfg_dbg("");
-	mapping = mmap(NULL,
-		dev->frame_size * FRAMES_PER_BUFFER * dev->num_buffers, PROT_READ,
-		flags, dev->fd, 0);
-	if (mapping == MAP_FAILED) {
-		b3dfg_err("mmap failed errno=%d", errno);
-		return NULL;
-	}
-
-	dev->mapping = mapping;
-	return mapping;
-}
-
-/** \ingroup io
- * Obtain the base address a mapping previously created with
- * b3dfg_map_buffers().
- *
- * \param dev a device handle
- * \returns the address of the active mapping
- * \returns NULL if there is no active mapping
- */
-API_EXPORTED unsigned char *b3dfg_get_mapping(b3dfg_dev *dev)
-{
-	return dev->mapping;
-}
-
-/** \ingroup io
- * Unmap the mapping previously created with b3dfg_map_buffers(). It is legal
- * to call this function even when there is no active mapping, in which case
- * this function simply returns.
- *
- * Do not attempt to access any previous mapping after calling this function.
- *
- * \param dev a device handle
- */
-API_EXPORTED void b3dfg_unmap_buffers(b3dfg_dev *dev)
-{
-	int r;
-	if (!dev->mapping)
-		return;
-
-	b3dfg_dbg("");
-	r = munmap(dev->mapping,
-		dev->frame_size * FRAMES_PER_BUFFER * dev->num_buffers);
-	if (r != 0)
-		b3dfg_err("munmap failed r=%d errno=%d", r, errno);
-	dev->mapping = NULL;
-}
 
 /** \ingroup core
- * Initialize the library. This function should be called before any other
- * libb3dfg function is called.
+ * Initialize the library and obtain a device handle for the frame grabber.
+ * This function should be called before any other libb3dfg function is called.
  *
- * \returns 0 on success
- * \returns non-zero on error
+ * \param idx numerical index of the frame grabber to be opened.
+ * \returns a device handle or NULL on error.
  */
-API_EXPORTED int b3dfg_init(void)
+API_EXPORTED b3dfg_dev * b3dfg_init(unsigned int idx)
 {
-	return 0;
+	struct b3dfg_dev *dev;
+	char filename[MAXPATHLEN];
+	int r;
+	int frame_size;
+
+	if (idx > 9) {
+		b3dfg_err("invalid index %d", idx);
+		return NULL;
+	}
+
+	dev = malloc(sizeof(*dev));
+	if (!dev)
+		return NULL;
+
+	r = snprintf(filename, MAXPATHLEN,
+		"/sys/class/b3dfg/b3dfg%1d/device/frame_size", idx);
+	if (r < 0 || r >= MAXPATHLEN) {
+		b3dfg_err("snprintf(syspath) failed errno=%d\n", errno);
+		return NULL;
+	}
+
+	r = read_sysfs_int(filename, &frame_size);
+	/* b3dfg_err() called in read_sysfs_int() */
+	if (r < 0)
+		return NULL;
+
+	b3dfg_dbg("init frame_size=%d", frame_size);
+	dev->fd = -1;
+	dev->idx = idx;
+	dev->frame_size = frame_size;
+	dev->num_buffers = B3DFG_NUM_BUFFERS;
+	dev->mapping = NULL;
+	return dev;
 }
 
 /** \ingroup core
@@ -555,7 +499,7 @@ API_EXPORTED int b3dfg_init(void)
  * any libb3dfg functions after calling this function unless you call
  * b3dfg_init() again.
  */
-API_EXPORTED void b3dfg_exit(void)
+API_EXPORTED void b3dfg_exit(b3dfg_dev *dev)
 {
 
 }

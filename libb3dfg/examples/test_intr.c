@@ -19,7 +19,6 @@
 #define RUNTIME 60
 
 static b3dfg_dev *dev;
-static unsigned char *mapping;
 static unsigned int frame_size;
 
 int main(void)
@@ -28,7 +27,7 @@ int main(void)
 	int r = 1;
     int triggering = 0;
 
-	dev = b3dfg_open(0);
+	dev = b3dfg_init(0);
 	if (!dev) {
 		fprintf(stderr, "open failed\n");
 		goto out;
@@ -38,12 +37,6 @@ int main(void)
 		b3dfg_get_wand_status(dev) ? "connected" : "disconnected");
 
 	frame_size = b3dfg_get_frame_size(dev);
-
-	mapping = b3dfg_map_buffers(dev, 0);
-	if (!mapping) {
-		fprintf(stderr, "mapping failed\n");
-		goto out;
-	}
 
     if ( (fd = open_serial("/dev/ttyUSB0")) <= 0 ) {
         r = -1;
@@ -55,9 +48,9 @@ int main(void)
         goto out;
     }
 
-	r = b3dfg_set_transmission(dev, 1);
+	r = b3dfg_open(dev, 0);
 	if (r) {
-		fprintf(stderr, "set_transmission failed\n");
+		fprintf(stderr, "open failed\n");
 		goto out;
 	}
 
@@ -68,8 +61,9 @@ int main(void)
 out:
     if (triggering)
         send_cmd(fd, STOP_TRIGGERS);
-	if (dev)
-		b3dfg_unmap_buffers(dev);
-	b3dfg_close(dev);
+	if (dev) {
+	    b3dfg_close(dev);
+		b3dfg_exit(dev);
+    }
 	return r;
 }

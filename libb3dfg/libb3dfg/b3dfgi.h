@@ -20,9 +20,8 @@ struct b3dfg_wait {
 };
 
 #define B3DFG_IOC_MAGIC		0xb3 /* dfg :-) */
-#define B3DFG_IOCTTRANS		_IO(B3DFG_IOC_MAGIC, 1)
-#define B3DFG_IOCTRELBUF	_IO(B3DFG_IOC_MAGIC, 2)
-#define B3DFG_IOCTGETBUF	_IOWR(B3DFG_IOC_MAGIC, 3, struct b3dfg_wait)
+#define B3DFG_IOCTRELBUF	_IO(B3DFG_IOC_MAGIC, 1)
+#define B3DFG_IOCTGETBUF	_IOWR(B3DFG_IOC_MAGIC, 2, struct b3dfg_wait)
 
 #define FRAMES_PER_BUFFER 3
 #define B3DFG_NUM_BUFFERS 3

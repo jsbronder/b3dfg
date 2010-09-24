@@ -22,26 +22,20 @@ struct b3dfg_buffer_state {
 };
 typedef struct b3dfg_buffer_state b3dfg_buffer_state;
 
-int b3dfg_init(void);
-void b3dfg_exit(void);
+b3dfg_dev *b3dfg_init(unsigned int idx);
+void b3dfg_exit(b3dfg_dev *dev);
 
-b3dfg_dev *b3dfg_open(unsigned int idx);
+int b3dfg_open(b3dfg_dev *dev, int prefault);
 void b3dfg_close(b3dfg_dev *dev);
 
 int b3dfg_get_wand_status(b3dfg_dev *dev);
 
 int b3dfg_get_fd(b3dfg_dev *dev);
 unsigned int b3dfg_get_frame_size(b3dfg_dev *dev);
-int b3dfg_set_transmission(b3dfg_dev *dev, int enabled);
 
 int b3dfg_release_buffer(b3dfg_dev *dev);
 int b3dfg_get_buffer(b3dfg_dev *dev, unsigned int timeout, 
 	b3dfg_buffer_state *state);
-
-unsigned char *b3dfg_map_buffers(b3dfg_dev *dev, int prefault);
-unsigned char *b3dfg_get_mapping(b3dfg_dev *dev);
-void b3dfg_unmap_buffers(b3dfg_dev *dev);
-
 #endif
 
 // vim: noet
