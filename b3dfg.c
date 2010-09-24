@@ -53,9 +53,8 @@ MODULE_LICENSE("GPL");
 #define B3DFG_REGS_LENGTH 0x10000
 
 #define B3DFG_IOC_MAGIC		0xb3 /* dfg :-) */
-#define B3DFG_IOCTTRANS		_IO(B3DFG_IOC_MAGIC, 1)
-#define B3DFG_IOCTRELBUF	_IO(B3DFG_IOC_MAGIC, 2)
-#define B3DFG_IOCTGETBUF	_IOWR(B3DFG_IOC_MAGIC, 3, struct b3dfg_wait)
+#define B3DFG_IOCTRELBUF	_IO(B3DFG_IOC_MAGIC, 1)
+#define B3DFG_IOCTGETBUF	_IOWR(B3DFG_IOC_MAGIC, 2, struct b3dfg_wait)
 
 enum {
 	/* number of 4kb pages per frame */
@@ -343,6 +342,11 @@ static int get_buffer(struct b3dfg_dev *fgdev, void __user *arg)
 		return -EINVAL;
 	}
 
+	if (unlikely(!b3dfg_read32(fgdev, B3D_REG_WAND_STS))) {
+		dev_dbg(dev, "cannot get buffer without wand\n");
+		return -EINVAL;
+	}
+	
 	spin_lock_irqsave(&fgdev->buffer_lock, flags);
 	if (fgdev->consumer != current->pid) {
 		dev_dbg(dev, "get_buffer:  pid %d does not have consumer lock\n", current->pid);
@@ -451,49 +455,6 @@ static struct vm_operations_struct b3dfg_vm_ops = {
 	.fault = b3dfg_vma_fault,
 };
 
-static int enable_transmission(struct b3dfg_dev *fgdev)
-{
-	unsigned long flags;
-	struct device *dev = &fgdev->pdev->dev;
-	int r = 0;
-
-	dev_dbg(dev, "enable transmission\n");
-
-	/* check the cable is plugged in. */
-	if (!b3dfg_read32(fgdev, B3D_REG_WAND_STS)) {
-		dev_dbg(dev, "cannot start transmission without wand\n");
-		return -EINVAL;
-	}
-
-	spin_lock_irqsave(&fgdev->buffer_lock, flags);
-	if (fgdev->consumer && fgdev->consumer != current->pid) {
-		dev_dbg(dev, "locked by consumer, pid %d", fgdev->consumer);
-		r = -EBUSY;
-		goto out_unlock;
-	}
-	fgdev->consumer = current->pid;
-
-	/* Handle racing enable_transmission calls. */
-	if (fgdev->transmission_enabled)
-		goto out_unlock;
-
-	spin_lock(&fgdev->triplets_dropped_lock);
-	fgdev->triplets_dropped = 0;
-	spin_unlock(&fgdev->triplets_dropped_lock);
-
-	fgdev->triplet_ready = 0;
-	fgdev->cur_dma_frame_idx = -1;
-	fgdev->cur_dma_buf_idx = -1;
-	fgdev->cur_user_buf_idx = -1;
-	fgdev->transmission_enabled = 1;
-
-	/* Enable DMA and cable status interrupts. */
-	b3dfg_write32(fgdev, B3D_REG_HW_CTRL, 0x03);
-
-out_unlock:
-	spin_unlock_irqrestore(&fgdev->buffer_lock, flags);
-	return r;
-}
 
 static int disable_transmission(struct b3dfg_dev *fgdev)
 {
@@ -531,18 +492,6 @@ static int disable_transmission(struct b3dfg_dev *fgdev)
 out_unlock:
 	spin_unlock_irqrestore(&fgdev->buffer_lock, flags);
 	return r;
-}
-
-static int set_transmission(struct b3dfg_dev *fgdev, int enabled)
-{
-	int res = 0;
-	
-	if (enabled)
-		res = enable_transmission(fgdev);
-	else if (!enabled)
-		res = disable_transmission(fgdev);
-
-	return res;
 }
 
 /* Called in interrupt context. */
@@ -753,22 +702,54 @@ static int b3dfg_open(struct inode *inode, struct file *filp)
 {
 	struct b3dfg_dev *fgdev =
 		container_of(inode->i_cdev, struct b3dfg_dev, chardev);
+	struct device *dev = &fgdev->pdev->dev;
+	int r = 0;
+	unsigned long flags;
 
 	dev_dbg(&fgdev->pdev->dev, "open\n");
 	filp->private_data = fgdev;
-	return 0;
+
+	/* check the cable is plugged in. */
+	if (!b3dfg_read32(fgdev, B3D_REG_WAND_STS)) {
+		dev_dbg(dev, "cannot start transmission without wand\n");
+		return -EINVAL;
+	}
+
+	spin_lock_irqsave(&fgdev->buffer_lock, flags);
+	if (fgdev->consumer && fgdev->consumer != current->pid) {
+		dev_dbg(dev, "locked by consumer, pid %d", fgdev->consumer);
+		r = -EBUSY;
+		goto out_unlock;
+	} 
+
+	/* Handle racing open calls. */
+	if (fgdev->consumer)
+		goto out_unlock;
+
+	spin_lock(&fgdev->triplets_dropped_lock);
+	fgdev->triplets_dropped = 0;
+	spin_unlock(&fgdev->triplets_dropped_lock);
+
+	fgdev->consumer = current->pid;
+	fgdev->triplet_ready = 0;
+	fgdev->cur_dma_frame_idx = -1;
+	fgdev->cur_dma_buf_idx = -1;
+	fgdev->cur_user_buf_idx = -1;
+	fgdev->transmission_enabled = 1;
+
+	/* Enable DMA and cable status interrupts. */
+	b3dfg_write32(fgdev, B3D_REG_HW_CTRL, 0x03);
+
+out_unlock:
+	spin_unlock_irqrestore(&fgdev->buffer_lock, flags);
+	return r;
 }
 
 static int b3dfg_release(struct inode *inode, struct file *filp)
 {
 	struct b3dfg_dev *fgdev = filp->private_data;
 
-	dev_dbg(&fgdev->pdev->dev, "release\n");
-	if (fgdev->consumer == current->pid) {
-		dev_dbg(&fgdev->pdev->dev, "release:  forcing disable transmission.\n");
-		disable_transmission(fgdev);
-		return 0;
-	}
+	disable_transmission(fgdev);
 	return 0;
 }
 
@@ -777,8 +758,6 @@ static long b3dfg_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 	struct b3dfg_dev *fgdev = filp->private_data;
 
 	switch (cmd) {
-	case B3DFG_IOCTTRANS:
-		return set_transmission(fgdev, (int) arg);
 	case B3DFG_IOCTRELBUF:
 		return release_buffer(fgdev);
 	case B3DFG_IOCTGETBUF:
@@ -835,19 +814,6 @@ static int b3dfg_mmap(struct file *filp, struct vm_area_struct *vma)
 	return r;
 }
 
-static int b3dfg_flush(struct file *filp, fl_owner_t id)
-{
-	struct b3dfg_dev *fgdev = filp->private_data;
-
-	if (fgdev->consumer == current->pid) {
-		dev_dbg(&fgdev->pdev->dev, "flush:  forcing disable transmission.\n");
-		disable_transmission(fgdev);
-		return 0;
-	}
-	return 0;
-}
-
-
 static struct file_operations b3dfg_fops = {
 	.owner = THIS_MODULE,
 	.open = b3dfg_open,
@@ -855,7 +821,6 @@ static struct file_operations b3dfg_fops = {
 	.unlocked_ioctl = b3dfg_ioctl,
 	.poll = b3dfg_poll,
 	.mmap = b3dfg_mmap,
-	.flush = b3dfg_flush,
 };
 
 
