@@ -535,6 +535,8 @@ static void handle_cstate_unplug(struct b3dfg_dev *fgdev)
 	}
 	dequeue_all_buffers(fgdev);
 	spin_unlock(&fgdev->buffer_lock);
+
+	sysfs_notify(&dev->kobj, NULL, "cable_status");
 }
 
 /* Called in interrupt context. */
