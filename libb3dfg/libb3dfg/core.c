@@ -341,6 +341,11 @@ API_EXPORTED int b3dfg_get_wand_status(b3dfg_dev *dev)
 	int r;
 	int status;
 	char filename[MAXPATHLEN];	
+
+	if (dev->cstate_fd != -1) {
+		dev->cstate_fd = -1;
+		close(dev->cstate_fd);
+	}
 	
 	r = snprintf(filename, MAXPATHLEN,
 		"/sys/class/b3dfg/b3dfg%1d/device/cable_status", dev->idx);
@@ -382,6 +387,51 @@ API_EXPORTED int b3dfg_get_fd(b3dfg_dev *dev)
 API_EXPORTED unsigned int b3dfg_get_frame_size(b3dfg_dev *dev)
 {
 	return dev->frame_size;
+}
+
+/** \ingroup io
+ * Obtain a file descriptor corresponding to the cable state.  You can
+ * pass this descriptor to the poll() or select() system calls to be alerted
+ * when the driver notices a cable state change.
+ *
+ * Note that this is exported via sysfs, so reading from this file descriptor
+ * is undefined.  The correct way to get state after poll() or select()
+ * to call b3dfg_get_wand_status() (which will close this file descriptor).
+ */
+API_EXPORTED int b3dfg_get_wand_status_fd(b3dfg_dev *dev)
+{
+	char filename[MAXPATHLEN];
+	char str[32];
+	int fd, r;
+
+	if (dev->cstate_fd != -1) {
+		close(dev->cstate_fd);
+		dev->cstate_fd = -1;
+	}
+	
+	r = snprintf(filename, MAXPATHLEN,
+		"/sys/class/b3dfg/b3dfg%1d/device/cable_status", dev->idx);
+	if (r < 0 || r >= MAXPATHLEN) {
+		r = errno == 0 ? ENOMEM : errno;
+		b3dfg_err("snprintf(syspath) failed errno=%d\n", errno);
+		return -1;
+	}
+
+	fd = open(filename, O_RDONLY);
+	if (fd < 0) {
+		r = errno;
+		b3dfg_err("open(%s) failed errno=%d", filename, r);
+		return r;
+	}
+
+	if (read(fd, str, 32) < 0){
+		r = errno;
+		close(fd);
+		b3dfg_err("read(%s) failed errno=%d", filename, r);
+		return r;
+	}
+	dev->cstate_fd = fd;
+	return fd;
 }
 
 /** \ingroup io

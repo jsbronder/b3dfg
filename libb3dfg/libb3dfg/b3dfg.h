@@ -29,6 +29,7 @@ int b3dfg_open(b3dfg_dev *dev, int prefault);
 void b3dfg_close(b3dfg_dev *dev);
 
 int b3dfg_get_wand_status(b3dfg_dev *dev);
+int b3dfg_get_wand_status_fd(b3dfg_dev *dev);
 
 int b3dfg_get_fd(b3dfg_dev *dev);
 unsigned int b3dfg_get_frame_size(b3dfg_dev *dev);

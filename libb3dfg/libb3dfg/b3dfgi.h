@@ -28,6 +28,7 @@ struct b3dfg_wait {
 
 struct b3dfg_dev {
 	int fd;
+	int cstate_fd;
 	unsigned int idx;
 	unsigned int frame_size;
 	unsigned int num_buffers;
