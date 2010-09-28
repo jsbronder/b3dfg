@@ -614,35 +614,37 @@ static void transfer_complete(struct b3dfg_dev *fgdev)
  * cur_dma_frame_idx is the (0-based) *last* frame to have been transferred (or
  * -1 if none). Thus there should be a difference of 2 between them.
  */
-static bool setup_next_frame_transfer(struct b3dfg_dev *fgdev, int idx)
+static int setup_next_frame_transfer(struct b3dfg_dev *fgdev, int idx)
 {
 	struct device *dev = &fgdev->pdev->dev;
-	bool need_ack = 1;
+	int r = 0;
 
 	dev_dbg(dev, "program DMA transfer for next frame: %d\n", idx);
 
 	if (fgdev->cur_dma_buf_idx == -1) {
-		/* Find a new buffer to pack the triplet into */
-		while (find_free_buffer(fgdev, &fgdev->cur_dma_buf_idx) != 0) {
-			/* TOFIX:  Can loop forever */
-			dev_warn(dev, "Unable to find free buffer.\n");
+		/* Find a new buffer to pack the triplet into.  In reality this
+		 * should not fail as the user cannot lock more than one buffer
+		 * at a time.  However, if it does, fail gracefully. */
+		if (unlikely(find_free_buffer(fgdev, &fgdev->cur_dma_buf_idx) != 0)) {
+			dev_err(dev, "Unable to find free buffer.\n");
+			return -ENOMEM;
 		}
 		fgdev->buffers[fgdev->cur_dma_buf_idx].state = B3DFG_BUFFER_PENDING;
 		dev_dbg(dev, "Preparing to fill buffer %d\n", fgdev->cur_dma_buf_idx);
 	}
 
 	if (idx == fgdev->cur_dma_frame_idx + 2) {
-		if (setup_frame_transfer(fgdev, idx - 1))
+		if (setup_frame_transfer(fgdev, idx - 1)) {
 			dev_err(dev, "unable to map DMA buffer\n");
-		need_ack = 0;
+			return -EIO;
+		}
 	} else {
 		dev_err(dev, "frame mismatch, got %d, expected %d\n",
 			idx, fgdev->cur_dma_frame_idx + 2);
-
-		/* FIXME: handle dropped triplets here */
+		return -EBADE;
 	}
 
-	return need_ack;
+	return r;
 }
 
 static irqreturn_t b3dfg_intr(int irq, void *dev_id)
@@ -651,7 +653,7 @@ static irqreturn_t b3dfg_intr(int irq, void *dev_id)
 	struct device *dev = &fgdev->pdev->dev;
 	u32 sts;
 	u8 dropped;
-	bool need_ack = 1;
+	bool error = 1;
 	irqreturn_t res = IRQ_HANDLED;
 
 	sts = b3dfg_read32(fgdev, B3D_REG_DMA_STS);
@@ -691,16 +693,14 @@ static irqreturn_t b3dfg_intr(int irq, void *dev_id)
 		/* Check for DMA errors reported by the hardware. */
 		if (unlikely(dma_status & 0x1)) {
 			dev_err(dev, "EC220 error: %08x\n", dma_status);
-
-			/* FIXME flesh out error handling */
+			error = -EIO;
 			goto out_unlock;
 		}
 
 		/* Sanity check, we should have a frame index at this point. */
 		if (unlikely(fgdev->cur_dma_frame_idx == -1)) {
 			dev_err(dev, "completed but no last idx?\n");
-
-			/* FIXME flesh out error handling */
+			error = -EBADE;
 			goto out_unlock;
 		}
 
@@ -709,15 +709,18 @@ static irqreturn_t b3dfg_intr(int irq, void *dev_id)
 
 	/* Is there another frame transfer pending? */
 	if (sts & 0x3)
-		need_ack = setup_next_frame_transfer(fgdev, sts & 0x3);
+		error = setup_next_frame_transfer(fgdev, sts & 0x3);
 	else
 		fgdev->cur_dma_frame_idx = -1;
 
 out_unlock:
 	spin_unlock(&fgdev->buffer_lock);
 out:
-	if (need_ack) {
-		dev_dbg(dev, "acknowledging interrupt\n");
+	if (error) {
+		/* TODO:  Shutdown transmission */
+		dev_dbg(dev, "Error %d while handling interrupt.\n", error);
+
+		/* Do not clear the interrupt bit as something went wrong. */
 		b3dfg_write32(fgdev, B3D_REG_EC220_DMA_STS, 0x0b);
 	}
 	return res;
