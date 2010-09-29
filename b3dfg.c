@@ -651,7 +651,8 @@ static irqreturn_t b3dfg_intr(int irq, void *dev_id)
 	struct device *dev = &fgdev->pdev->dev;
 	u32 sts;
 	u8 dropped;
-	bool error = 1;
+	bool write_ack = 0;
+	int error = 0;
 	irqreturn_t res = IRQ_HANDLED;
 
 	sts = b3dfg_read32(fgdev, B3D_REG_DMA_STS);
@@ -678,6 +679,7 @@ static irqreturn_t b3dfg_intr(int irq, void *dev_id)
 	/* Handle a cable state change (i.e. the wand being unplugged). */
 	if (sts & 0x08) {
 		handle_cstate_change(fgdev);
+		write_ack = 1;
 		goto out;
 	}
 
@@ -707,18 +709,22 @@ static irqreturn_t b3dfg_intr(int irq, void *dev_id)
 	/* Is there another frame transfer pending? */
 	if (sts & 0x3)
 		error = setup_next_frame_transfer(fgdev, sts & 0x3);
-	else
+	else {
+		write_ack = 1;
 		fgdev->cur_dma_frame_idx = -1;
+	}
 
 out_unlock:
 	spin_unlock(&fgdev->buffer_lock);
+
 out:
-	if (error) {
+	if (error)
 		/* TODO:  Shutdown transmission */
 		dev_dbg(dev, "Error %d while handling interrupt.\n", error);
 
-		/* Do not clear the interrupt bit as something went wrong. */
-		b3dfg_write32(fgdev, B3D_REG_EC220_DMA_STS, 0x0b);
+	if (write_ack || error) {
+		/* Reset the error and interrupt bit */
+		b3dfg_write32(fgdev, B3D_REG_EC220_DMA_STS, 0x03);
 	}
 	return res;
 }
