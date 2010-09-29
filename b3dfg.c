@@ -113,7 +113,7 @@ struct b3dfg_dev {
 	unsigned int frame_size;
 
 	/*
-	 * Protects buffer state, including triplet_ready, cur_dma_buf_idx,
+	 * Protects buffer state, including cur_dma_buf_idx,
 	 * cur_dma_frame_idx, cur_dma_frame_addr, cur_user_buf_idx, consumer,
 	 * triplets_cnt.
 	 */
@@ -153,7 +153,6 @@ struct b3dfg_dev {
 	wait_queue_head_t buffer_waitqueue;
 
 	unsigned int transmission_enabled:1;
-	unsigned int triplet_ready:1;
 
 };
 
@@ -527,7 +526,6 @@ static void handle_cstate_unplug(struct b3dfg_dev *fgdev)
 	fgdev->transmission_enabled = 0;
 
 	fgdev->cur_dma_frame_idx = -1;
-	fgdev->triplet_ready = 0;
 	if (fgdev->cur_dma_frame_addr) {
 		pci_unmap_single(fgdev->pdev, fgdev->cur_dma_frame_addr,
 				 fgdev->frame_size, PCI_DMA_FROMDEVICE);
@@ -758,7 +756,6 @@ static int b3dfg_open(struct inode *inode, struct file *filp)
 	spin_unlock(&fgdev->triplets_dropped_lock);
 
 	fgdev->consumer = current->pid;
-	fgdev->triplet_ready = 0;
 	fgdev->cur_dma_frame_idx = -1;
 	fgdev->cur_dma_buf_idx = -1;
 	fgdev->cur_user_buf_idx = -1;
