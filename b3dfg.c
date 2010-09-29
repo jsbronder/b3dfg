@@ -476,65 +476,24 @@ static struct vm_operations_struct b3dfg_vm_ops = {
 	.fault = b3dfg_vma_fault,
 };
 
-
-static int disable_transmission(struct b3dfg_dev *fgdev)
+/* Caller should hold buffer_lock */
+static void stop_transmission(struct b3dfg_dev *fgdev)
 {
-	struct device *dev = &fgdev->pdev->dev;
-	unsigned long flags;
-	u32 tmp;
-	int r = 0;
-
-	dev_dbg(dev, "disable transmission\n");
-
-	spin_lock_irqsave(&fgdev->buffer_lock, flags);
-	if (fgdev->consumer && fgdev->consumer != current->pid) {
-		dev_dbg(dev, "locked by consumer, pid %d", fgdev->consumer);
-		r = -EBUSY;
-		goto out_unlock;
-	}
-	fgdev->consumer = 0;
-
-	/* guarantee that no more interrupts will be serviced */
 	if (!fgdev->transmission_enabled)
-		goto out_unlock;	
+		return;
 	fgdev->transmission_enabled = 0;
 
 	b3dfg_write32(fgdev, B3D_REG_HW_CTRL, 0);
-
-	/* FIXME: temporary debugging only. if the board stops transmitting,
-	 * hitting ctrl+c and seeing this message is useful for determining
-	 * the state of the board. */
-	tmp = b3dfg_read32(fgdev, B3D_REG_DMA_STS);
-	dev_dbg(dev, "DMA_STS reads %x after TX stopped\n", tmp);
-
-	dequeue_all_buffers(fgdev);
-	wake_up_interruptible(&fgdev->buffer_waitqueue);
-
-out_unlock:
-	spin_unlock_irqrestore(&fgdev->buffer_lock, flags);
-	return r;
-}
-
-/* Called in interrupt context. */
-static void handle_cstate_unplug(struct b3dfg_dev *fgdev)
-{
-	/* Disable all interrupts. */
-	b3dfg_write32(fgdev, B3D_REG_HW_CTRL, 0);
-
-	/* Stop transmission. */
-	spin_lock(&fgdev->buffer_lock);
-	fgdev->transmission_enabled = 0;
-
 	fgdev->cur_dma_frame_idx = -1;
 	if (fgdev->cur_dma_frame_addr) {
 		pci_unmap_single(fgdev->pdev, fgdev->cur_dma_frame_addr,
-				 fgdev->frame_size, PCI_DMA_FROMDEVICE);
+			fgdev->frame_size, PCI_DMA_FROMDEVICE);
 		fgdev->cur_dma_frame_addr = 0;
 	}
-	dequeue_all_buffers(fgdev);
-	spin_unlock(&fgdev->buffer_lock);
 
-	sysfs_notify(&dev->kobj, NULL, "cable_status");
+	dequeue_all_buffers(fgdev);
+	wake_up_interruptible(&fgdev->buffer_waitqueue);
+	return;
 }
 
 /* Called in interrupt context. */
@@ -567,8 +526,12 @@ static void handle_cstate_change(struct b3dfg_dev *fgdev)
 	if (cstate) {
 		dev_warn(dev, "ignoring unexpected plug event\n");
 		return;
+	} else {
+		spin_lock(&fgdev->buffer_lock);
+		stop_transmission(fgdev);
+		spin_unlock(&fgdev->buffer_lock);
+		sysfs_notify(&dev->kobj, NULL, "cable_status");
 	}
-	handle_cstate_unplug(fgdev);
 
 	/*
 	 * Record cable state change timestamp & wake anyone waiting
@@ -779,9 +742,24 @@ out_unlock:
 static int b3dfg_release(struct inode *inode, struct file *filp)
 {
 	struct b3dfg_dev *fgdev = filp->private_data;
+	struct device *dev = &fgdev->pdev->dev;
+	unsigned long flags;
+	int r = 0;
 
-	disable_transmission(fgdev);
-	return 0;
+	dev_dbg(dev, "release\n");
+
+	spin_lock_irqsave(&fgdev->buffer_lock, flags);
+	if (unlikely(fgdev->consumer && fgdev->consumer != current->pid)) {
+		dev_dbg(dev, "locked by consumer, pid %d", fgdev->consumer);
+		r = -EBUSY;
+		goto out_unlock;
+	}
+	fgdev->consumer = 0;
+	stop_transmission(fgdev);
+
+out_unlock:
+	spin_unlock_irqrestore(&fgdev->buffer_lock, flags);
+	return r;
 }
 
 static long b3dfg_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
