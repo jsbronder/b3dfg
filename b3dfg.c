@@ -658,7 +658,6 @@ static irqreturn_t b3dfg_intr(int irq, void *dev_id)
 
 	sts = b3dfg_read32(fgdev, B3D_REG_DMA_STS);
 	if (unlikely(sts == 0)) {
-		dev_warn(dev, "ignore interrupt, DMA status is 0\n");
 		res = IRQ_NONE;
 		goto out;
 	}
