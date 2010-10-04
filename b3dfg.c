@@ -678,13 +678,13 @@ static irqreturn_t b3dfg_intr(int irq, void *dev_id)
 	}
 
 out_unlock:
+	if (error) {
+		dev_dbg(dev, "Error %d while handling interrupt.\n", error);
+		stop_transmission(fgdev);
+	}
 	spin_unlock(&fgdev->buffer_lock);
 
 out:
-	if (error)
-		/* TODO:  Shutdown transmission */
-		dev_dbg(dev, "Error %d while handling interrupt.\n", error);
-
 	if (write_ack || error) {
 		/* Reset the error and interrupt bit */
 		b3dfg_write32(fgdev, B3D_REG_EC220_DMA_STS, 0x03);
