@@ -32,7 +32,6 @@
 #include <linux/types.h>
 #include <linux/cdev.h>
 #include <linux/list.h>
-#include <linux/poll.h>
 #include <linux/wait.h>
 #include <linux/mm.h>
 #include <linux/uaccess.h>
@@ -784,32 +783,6 @@ static long b3dfg_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 	}
 }
 
-static unsigned int b3dfg_poll(struct file *filp, poll_table *poll_table)
-{
-	struct b3dfg_dev *fgdev = filp->private_data;
-	unsigned long flags, when;
-	int i;
-	int r = 0;
-
-	when = get_cstate_change(fgdev);
-	poll_wait(filp, &fgdev->buffer_waitqueue, poll_table);
-
-	spin_lock_irqsave(&fgdev->buffer_lock, flags);
-	for (i = 0; i < b3dfg_nbuf; i++) {
-		if (fgdev->buffers[i].state == B3DFG_BUFFER_POPULATED) {
-			r = POLLIN | POLLRDNORM;
-			break;
-		}
-	}
-	spin_unlock_irqrestore(&fgdev->buffer_lock, flags);
-
-	/* TODO: Confirm this is how we want to communicate the change. */
-	if (!fgdev->transmission_enabled || when != get_cstate_change(fgdev))
-		r = POLLERR;
-
-	return r;
-}
-
 static int b3dfg_mmap(struct file *filp, struct vm_area_struct *vma)
 {
 	struct b3dfg_dev *fgdev = filp->private_data;
@@ -835,7 +808,6 @@ static struct file_operations b3dfg_fops = {
 	.open = b3dfg_open,
 	.release = b3dfg_release,
 	.unlocked_ioctl = b3dfg_ioctl,
-	.poll = b3dfg_poll,
 	.mmap = b3dfg_mmap,
 };
 
