@@ -496,6 +496,24 @@ static void stop_transmission(struct b3dfg_dev *fgdev)
 	return;
 }
 
+/* Caller should hold buffer_lock */
+static void start_transmission(struct b3dfg_dev *fgdev)
+{
+	spin_lock(&fgdev->triplets_dropped_lock);
+	fgdev->triplets_dropped = 0;
+	spin_unlock(&fgdev->triplets_dropped_lock);
+
+	fgdev->cur_dma_frame_idx = -1;
+	fgdev->cur_dma_buf_idx = -1;
+	fgdev->cur_user_buf_idx = -1;
+	fgdev->transmission_enabled = 1;
+	fgdev->triplets_cnt = 0;
+
+	/* Enable DMA and cable status interrupts. */
+	b3dfg_write32(fgdev, B3D_REG_HW_CTRL, 0x03);
+	return;
+}
+
 /* Called in interrupt context. */
 static void handle_cstate_change(struct b3dfg_dev *fgdev)
 {
@@ -720,19 +738,8 @@ static int b3dfg_open(struct inode *inode, struct file *filp)
 	if (fgdev->consumer)
 		goto out_unlock;
 
-	spin_lock(&fgdev->triplets_dropped_lock);
-	fgdev->triplets_dropped = 0;
-	spin_unlock(&fgdev->triplets_dropped_lock);
-
 	fgdev->consumer = current->pid;
-	fgdev->cur_dma_frame_idx = -1;
-	fgdev->cur_dma_buf_idx = -1;
-	fgdev->cur_user_buf_idx = -1;
-	fgdev->transmission_enabled = 1;
-	fgdev->triplets_cnt = 0;
-
-	/* Enable DMA and cable status interrupts. */
-	b3dfg_write32(fgdev, B3D_REG_HW_CTRL, 0x03);
+	start_transmission(fgdev);
 
 out_unlock:
 	spin_unlock_irqrestore(&fgdev->buffer_lock, flags);
