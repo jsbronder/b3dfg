@@ -140,6 +140,8 @@ struct b3dfg_dev {
 	 */
 	spinlock_t cstate_lock;
 	unsigned long cstate_tstamp;
+	unsigned int transmission_was_enabled:1;
+	struct timer_list check_cstate;
 
 	/*
 	 * Protects triplets_dropped.
@@ -518,12 +520,12 @@ static void start_transmission(struct b3dfg_dev *fgdev)
 	return;
 }
 
-/* Called in interrupt context. */
-static void handle_cstate_change(struct b3dfg_dev *fgdev)
+static void handle_cstate_change(unsigned long data)
 {
+	struct b3dfg_dev *fgdev = (struct b3dfg_dev *)data;
 	u32 cstate = b3dfg_read32(fgdev, B3D_REG_WAND_STS);
-	unsigned long when;
 	struct device *dev = &fgdev->pdev->dev;
+	unsigned long when, flags;
 
 	dev_dbg(dev, "cable state change: %u\n", cstate);
 
@@ -545,15 +547,10 @@ static void handle_cstate_change(struct b3dfg_dev *fgdev)
 	 * unplug. Or at least track how frequently it is happening and do
 	 * so if too many come in.
 	 */
-	if (cstate) {
-		dev_warn(dev, "ignoring unexpected plug event\n");
-		return;
-	} else {
-		spin_lock(&fgdev->buffer_lock);
-		stop_transmission(fgdev);
-		spin_unlock(&fgdev->buffer_lock);
-		sysfs_notify(&dev->kobj, NULL, "cable_status");
-	}
+
+	spin_lock_irqsave(&fgdev->buffer_lock, flags);
+	if (cstate && fgdev->transmission_was_enabled && fgdev->consumer)
+		start_transmission(fgdev);
 
 	/*
 	 * Record cable state change timestamp & wake anyone waiting
@@ -565,8 +562,10 @@ static void handle_cstate_change(struct b3dfg_dev *fgdev)
 	if (when <= fgdev->cstate_tstamp)
 		when = fgdev->cstate_tstamp + 1;
 	fgdev->cstate_tstamp = when;
-	wake_up_interruptible(&fgdev->buffer_waitqueue);
 	spin_unlock(&fgdev->cstate_lock);
+	spin_unlock_irqrestore(&fgdev->buffer_lock, flags);
+	sysfs_notify(&dev->kobj, NULL, "cable_status");
+	wake_up_interruptible(&fgdev->buffer_waitqueue);
 }
 
 /* Called with buffer_lock held. */
@@ -661,14 +660,23 @@ static irqreturn_t b3dfg_intr(int irq, void *dev_id)
 			"b3dfg reported %d buffers dropped since last interrupt was handled",
 			dropped);
 
+	spin_lock(&fgdev->buffer_lock);
+
 	/* Handle a cable state change (i.e. the wand being unplugged). */
-	if (sts & 0x08) {
-		handle_cstate_change(fgdev);
-		write_ack = 1;
-		goto out;
+	if (unlikely(sts & 0x08)) {
+		if (!timer_pending(&fgdev->check_cstate)) {
+			unsigned long when;
+			fgdev->transmission_was_enabled = fgdev->transmission_enabled;
+			when = jiffies;
+			when = when + 10 * HZ / 1000;
+			fgdev->check_cstate.expires = when;
+			add_timer(&fgdev->check_cstate);
+			stop_transmission(fgdev);
+		} else
+			write_ack = 1;
+		goto out_unlock;
 	}
 
-	spin_lock(&fgdev->buffer_lock);
 
 	/* Has a frame transfer been completed? */
 	if (sts & 0x4) {
@@ -1034,6 +1042,10 @@ static int __devinit b3dfg_probe(struct pci_dev *pdev,
 		goto err_unmap;
 	}
 
+	init_timer(&fgdev->check_cstate);
+	fgdev->check_cstate.function = handle_cstate_change;
+	fgdev->check_cstate.data = (unsigned long)fgdev;
+
 	r = request_irq(pdev->irq, b3dfg_intr, IRQF_SHARED, DRIVER_NAME, fgdev);
 	if (r) {
 		dev_err(&pdev->dev, "couldn't request irq %d\n", pdev->irq);
@@ -1070,6 +1082,8 @@ static void __devexit b3dfg_remove(struct pci_dev *pdev)
 
 	dev_dbg(&pdev->dev, "remove\n");
 
+	if (timer_pending(&fgdev->check_cstate))
+		del_timer_sync(&fgdev->check_cstate);
 	free_irq(pdev->irq, fgdev);
 	iounmap(fgdev->regs);
 	pci_release_regions(pdev);
