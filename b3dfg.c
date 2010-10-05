@@ -482,6 +482,9 @@ static void stop_transmission(struct b3dfg_dev *fgdev)
 		return;
 	fgdev->transmission_enabled = 0;
 
+	/* Reset the DMA chip */
+	b3dfg_write32(fgdev, B3D_REG_EC220_DMA_STS, 0x03);
+	/* Disable DMA and cable status interrupts. */
 	b3dfg_write32(fgdev, B3D_REG_HW_CTRL, 0);
 	fgdev->cur_dma_frame_idx = -1;
 	if (fgdev->cur_dma_frame_addr) {
@@ -508,6 +511,8 @@ static void start_transmission(struct b3dfg_dev *fgdev)
 	fgdev->transmission_enabled = 1;
 	fgdev->triplets_cnt = 0;
 
+	/* Reset the DMA chip */
+	b3dfg_write32(fgdev, B3D_REG_EC220_DMA_STS, 0x03);
 	/* Enable DMA and cable status interrupts. */
 	b3dfg_write32(fgdev, B3D_REG_HW_CTRL, 0x03);
 	return;
@@ -885,9 +890,11 @@ static int b3dfg_init_dev(struct b3dfg_dev *fgdev)
 	 * are sure to capture a triplet from the start, rather than starting
 	 * from frame 2 or 3. Disabling interrupts causes the FG to throw away
 	 * all buffered data and stop buffering more until interrupts are
-	 * enabled again.
+	 * enabled again.  We also reset the DMA chip as if it never got an ack,
+	 * it will sit around continuing to toss out interrupts.
 	 */
 	b3dfg_write32(fgdev, B3D_REG_HW_CTRL, 0);
+	b3dfg_write32(fgdev, B3D_REG_EC220_DMA_STS, 0x03);
 
 	fgdev->frame_size = frm_size * 4096;
 	fgdev->buffers = kzalloc(sizeof(struct b3dfg_buffer) * b3dfg_nbuf,
